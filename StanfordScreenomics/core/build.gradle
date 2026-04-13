@@ -1,0 +1,22 @@
+plugins {
+    id 'org.jetbrains.kotlin.jvm'
+}
+
+// Do not use java.toolchain here: it forces a separate JDK 17 install and breaks IDE source-set
+// resolution when no toolchain is found and auto-download repos are unavailable. Target 17 on the
+// JVM that runs Gradle (Android Studio: set Gradle JDK to 17+).
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(org.jetbrains.kotlin.gradle.tasks.KotlinCompile).configureEach {
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    api 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib'
+}

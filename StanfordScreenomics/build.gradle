@@ -1,0 +1,50 @@
+plugins {
+    id 'com.android.application' version '8.13.2' apply false
+    id 'com.android.library' version '8.13.2' apply false
+    id 'org.jetbrains.kotlin.android' version '2.0.21' apply false
+    id 'org.jetbrains.kotlin.jvm' version '2.0.21' apply false
+    id 'com.google.gms.google-services' version '4.4.2' apply false
+}
+
+// macOS Finder duplicates ("SomeFile 2.xml", "SomeFile 3.xml", …) under build/intermediates break
+// resource parsing, dex merge, and bundleLibRuntimeToDir. Purge before Android tasks run.
+subprojects { Project sub ->
+    sub.afterEvaluate {
+        def isAndroid = sub.plugins.hasPlugin('com.android.application') ||
+            sub.plugins.hasPlugin('com.android.library')
+        if (!isAndroid) {
+            return
+        }
+        def purgeStaleNumberedIntermediates = {
+            def intermediatesDir = sub.file("${sub.buildDir}/intermediates")
+            if (!intermediatesDir.exists()) {
+                return
+            }
+            sub.fileTree(intermediatesDir).each { File f ->
+                if (!f.isFile()) {
+                    return
+                }
+                def n = f.name
+                // macOS duplicate names: "file 2.xml", "file 3.xml", … (invalid Android resource names)
+                if (!(n ==~ / \d+\.(class|dex|xml|flat)$/)) {
+                    return
+                }
+                f.delete()
+            }
+        }
+        sub.tasks.matching { task ->
+            def n = task.name
+            n == 'preBuild' ||
+                n ==~ /parse.*LocalResources/ ||
+                n ==~ /merge.*Resources/ ||
+                n ==~ /package.*Resources/ ||
+                n ==~ /dexBuilder.*/ ||
+                n ==~ /mergeProjectDex.*/ ||
+                n ==~ /mergeExtDex.*/ ||
+                n ==~ /mergeLibDex.*/ ||
+                n ==~ /bundleLibRuntimeToDir.*/
+        }.configureEach { task ->
+            task.doFirst purgeStaleNumberedIntermediates
+        }
+    }
+}

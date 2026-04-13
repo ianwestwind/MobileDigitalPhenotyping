@@ -1,0 +1,23 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+rootProject.name = "StanfordScreenomics"
+include ':app'
+include ':core'
+include ':modules:audio'
+include ':modules:gps'
+include ':modules:motion'
+include ':modules:screenshot'

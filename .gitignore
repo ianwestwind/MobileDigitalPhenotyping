@@ -1,0 +1,21 @@
+# Markdown / prompts / notes (code-only pushes)
+*.md
+**/*.md
+
+# Firebase & local secrets
+google-services.json
+**/google-services.json
+secrets.properties
+**/secrets.properties
+
+# Cursor / IDE (if present under repo)
+.cursor/
+**/.cursor/
+
+# Logs & crash dumps
+*.log
+hs_err_pid*.log
+replay_pid*.log
+
+# macOS
+.DS_Store

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Stanford Screenomics</string>
+    <string name="welcome_title">Stanford Screenomics</string>
+    <string name="welcome_subtitle">Start collection to run audio, motion, GPS, and screenshot pipelines in the background. You will be asked to allow screen capture (full display) once per session. Screenshots pause while the screen is off.</string>
+    <string name="start_all_modules">Start all modules</string>
+    <string name="stop_all_modules">Stop collection</string>
+    <string name="collection_notification_title">Phenotyping collection</string>
+    <string name="collection_notification_text">Audio, motion, GPS, and screenshot pipelines are active.</string>
+    <string name="collection_channel_name">Phenotyping collection</string>
+    <string name="collection_stop">Stop</string>
+    <string name="collection_error_runtime">Open the app once so collection can initialize, then try again.</string>
+    <string name="collection_projection_required">Allow screen capture to record the full display while collection runs, or stop and try again.</string>
+</resources>
