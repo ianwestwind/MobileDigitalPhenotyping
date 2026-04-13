@@ -11,6 +11,13 @@ secrets.properties
 # Cursor / IDE (if present under repo)
 .cursor/
 **/.cursor/
+.cursorrules
+.cursorignore
+**/.cursorrules
+**/.cursorignore
+
+# Kotlin build cache (module-local)
+StanfordScreenomics/.kotlin/
 
 # Logs & crash dumps
 *.log
