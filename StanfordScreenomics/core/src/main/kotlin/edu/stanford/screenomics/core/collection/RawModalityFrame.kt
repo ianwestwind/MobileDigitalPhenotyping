@@ -129,3 +129,30 @@ data class MotionImuRawFrame(
     val gyroZRadS: Float,
     val gyroAvailable: Boolean,
 ) : RawModalityFrame
+
+/** Accelerometer-only sample while movement is active (high-rate). */
+data class MotionAccelRawFrame(
+    override val correlationId: CorrelationId,
+    override val capturedAtEpochMillis: Long,
+    val eventTimestampNanos: Long,
+    val accelXMs2: Float,
+    val accelYMs2: Float,
+    val accelZMs2: Float,
+) : RawModalityFrame
+
+/** Gyroscope-only sample while movement is active (high-rate). */
+data class MotionGyroRawFrame(
+    override val correlationId: CorrelationId,
+    override val capturedAtEpochMillis: Long,
+    val eventTimestampNanos: Long,
+    val gyroXRadS: Float,
+    val gyroYRadS: Float,
+    val gyroZRadS: Float,
+    val gyroAvailable: Boolean,
+) : RawModalityFrame
+
+/** Periodic tick (e.g. every 1 min) to emit step counts for the elapsed window. */
+data class MotionStepMinuteTickFrame(
+    override val correlationId: CorrelationId,
+    override val capturedAtEpochMillis: Long,
+) : RawModalityFrame

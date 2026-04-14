@@ -7,20 +7,23 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.HandlerThread
-import edu.stanford.screenomics.core.collection.MotionImuRawFrame
-import edu.stanford.screenomics.core.collection.MotionRawCaptureFrame
+import edu.stanford.screenomics.core.collection.MotionAccelRawFrame
+import edu.stanford.screenomics.core.collection.MotionGyroRawFrame
+import edu.stanford.screenomics.core.collection.MotionStepMinuteTickFrame
 import edu.stanford.screenomics.core.collection.RawModalityFrame
 import edu.stanford.screenomics.core.module.template.BaseDataNode
 import edu.stanford.screenomics.core.module.template.ModulePipelineDispatchers
 import edu.stanford.screenomics.core.unified.CorrelationId
 import edu.stanford.screenomics.core.unified.ModalityKind
 import java.util.UUID
+import java.util.concurrent.Executors
 import kotlin.jvm.Volatile
 import kotlin.math.abs
 import kotlin.math.sqrt
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExecutorCoroutineDispatcher
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -28,20 +31,20 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private enum class ImuCollectionMode {
-    /** High-rate accelerometer + gyroscope for step detection and IMU payload. */
+    /** High-rate accelerometer + gyroscope while movement is present. */
     ACTIVE,
 
-    /** No gyro; low-rate accelerometer for wake-only. Heartbeats carry implicit zero-IMU / current step total. */
+    /** Low-rate accelerometer for wake-only; no IMU stream payloads. */
     IDLE,
 }
 
 /**
- * Gradle module `:modules:motion` — concrete [BaseDataNode] streaming [MotionImuRawFrame] from **accelerometer** and **gyroscope**
- * while movement is present. After sustained stillness, sensors drop to a **low-rate accelerometer** wake probe only and the node
- * emits periodic [MotionRawCaptureFrame] heartbeats so the pipeline still records **no new steps** (session step total unchanged,
- * IMU axes zeroed in the adapter).
+ * Gradle module `:modules:motion` — streams **separate** raw frames for accelerometer and gyroscope while [ImuCollectionMode.ACTIVE],
+ * and emits [MotionStepMinuteTickFrame] on a wall-clock cadence (default **1 min**) for step counts in that window.
+ * After sustained stillness, high-rate IMU stops; minute step ticks continue (typically **0** steps when idle).
  */
 class MotionDataNode(
     private val appContext: Context,
@@ -51,10 +54,9 @@ class MotionDataNode(
     pipelineDispatchers: ModulePipelineDispatchers = ModulePipelineDispatchers(),
     private val samplingDelayUs: Int = SensorManager.SENSOR_DELAY_GAME,
     private val idleAccelDelayUs: Int = SensorManager.SENSOR_DELAY_NORMAL,
-    /** Duration of near-still readings before switching to [ImuCollectionMode.IDLE]. */
     private val stationaryHoldNs: Long = 5_000_000_000L,
-    /** Interval between idle heartbeats (implicit zero-step / zero-IMU points). */
-    private val idleHeartbeatIntervalMs: Long = 55_000L,
+    /** Elapsed window length for [MotionStepMinuteTickFrame] (step rollup). */
+    private val minuteStepIntervalMs: Long = 60_000L,
 ) : BaseDataNode(adapter = adapter, cache = cache, dispatchers = pipelineDispatchers) {
 
     private val sensorManager: SensorManager =
@@ -65,7 +67,7 @@ class MotionDataNode(
 
     private val rawIngress = MutableSharedFlow<RawModalityFrame>(
         replay = 0,
-        extraBufferCapacity = 256,
+        extraBufferCapacity = 512,
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
@@ -74,7 +76,8 @@ class MotionDataNode(
     private var handlerThread: HandlerThread? = null
     private var sensorHandler: Handler? = null
     private var emissionScope: CoroutineScope? = null
-    private var idleHeartbeatJob: Job? = null
+    private var emitDispatcher: ExecutorCoroutineDispatcher? = null
+    private var minuteStepJob: Job? = null
 
     @Volatile
     private var imuCollectionMode: ImuCollectionMode = ImuCollectionMode.ACTIVE
@@ -112,6 +115,7 @@ class MotionDataNode(
                 lastGyroY = event.values[1]
                 lastGyroZ = event.values[2]
                 gyroSampleSeen = true
+                emitGyroFrame(event.timestamp)
             }
             Sensor.TYPE_ACCELEROMETER -> {
                 val ax = event.values[0]
@@ -129,7 +133,7 @@ class MotionDataNode(
                         return
                     }
                 }
-                emitImuFrame(event.timestamp, ax, ay, az)
+                emitAccelFrame(event.timestamp, ax, ay, az)
             }
         }
     }
@@ -172,25 +176,38 @@ class MotionDataNode(
         return abs(mag - GRAVITY_MS2) > IDLE_WAKE_STATIC_DEVIATION_MS2
     }
 
-    private fun emitImuFrame(eventTimestampNanos: Long, ax: Float, ay: Float, az: Float) {
+    private fun emitAccelFrame(eventTimestampNanos: Long, ax: Float, ay: Float, az: Float) {
         val scope = emissionScope ?: return
-        val gx = lastGyroX
-        val gy = lastGyroY
-        val gz = lastGyroZ
-        val gyroAvail = gyroSensor != null && gyroSampleSeen
-        val frame = MotionImuRawFrame(
-            correlationId = CorrelationId("motion-${UUID.randomUUID()}"),
+        val exec = emitDispatcher ?: return
+        val frame = MotionAccelRawFrame(
+            correlationId = CorrelationId("motion-accel-${UUID.randomUUID()}"),
             capturedAtEpochMillis = System.currentTimeMillis(),
             eventTimestampNanos = eventTimestampNanos,
             accelXMs2 = ax,
             accelYMs2 = ay,
             accelZMs2 = az,
+        )
+        scope.launch(exec) {
+            rawIngress.emit(frame)
+        }
+    }
+
+    private fun emitGyroFrame(eventTimestampNanos: Long) {
+        val scope = emissionScope ?: return
+        val exec = emitDispatcher ?: return
+        val gx = lastGyroX
+        val gy = lastGyroY
+        val gz = lastGyroZ
+        val frame = MotionGyroRawFrame(
+            correlationId = CorrelationId("motion-gyro-${UUID.randomUUID()}"),
+            capturedAtEpochMillis = System.currentTimeMillis(),
+            eventTimestampNanos = eventTimestampNanos,
             gyroXRadS = gx,
             gyroYRadS = gy,
             gyroZRadS = gz,
-            gyroAvailable = gyroAvail,
+            gyroAvailable = gyroSampleSeen,
         )
-        scope.launch(Dispatchers.Default) {
+        scope.launch(exec) {
             rawIngress.emit(frame)
         }
     }
@@ -204,27 +221,7 @@ class MotionDataNode(
         stationarySinceNs = null
         lastIdleAccelMag = null
         gyroSampleSeen = false
-        idleHeartbeatJob?.cancel()
-        val scope = emissionScope
-        val handler = sensorHandler
-        if (scope == null || handler == null) {
-            return
-        }
-        idleHeartbeatJob = scope.launch {
-            while (isActive && imuCollectionMode == ImuCollectionMode.IDLE) {
-                delay(idleHeartbeatIntervalMs)
-                if (imuCollectionMode != ImuCollectionMode.IDLE) {
-                    break
-                }
-                rawIngress.emit(
-                    MotionRawCaptureFrame(
-                        correlationId = CorrelationId("motion-idle-${UUID.randomUUID()}"),
-                        capturedAtEpochMillis = System.currentTimeMillis(),
-                        sensorTypePlaceholder = MOTION_IDLE_HEARTBEAT_PLACEHOLDER,
-                    ),
-                )
-            }
-        }
+        val handler = sensorHandler ?: return
         sensorManager.registerListener(sensorListener, accelSensor!!, idleAccelDelayUs, handler)
     }
 
@@ -234,8 +231,6 @@ class MotionDataNode(
         }
         sensorManager.unregisterListener(sensorListener)
         imuCollectionMode = ImuCollectionMode.ACTIVE
-        idleHeartbeatJob?.cancel()
-        idleHeartbeatJob = null
         stationarySinceNs = null
         lastIdleAccelMag = null
         val handler = sensorHandler ?: return
@@ -254,6 +249,7 @@ class MotionDataNode(
         onDeactivate()
         imuCollectionMode = ImuCollectionMode.ACTIVE
         emissionScope = CoroutineScope(collectionScope.coroutineContext)
+        emitDispatcher = Executors.newSingleThreadExecutor { r -> Thread(r, "motion-emit") }.asCoroutineDispatcher()
         val thread = HandlerThread("motion-imu").also { it.start() }
         handlerThread = thread
         sensorHandler = Handler(thread.looper)
@@ -261,11 +257,28 @@ class MotionDataNode(
         gyroSensor?.let { g ->
             sensorManager.registerListener(sensorListener, g, samplingDelayUs, sensorHandler)
         }
+        val scope = emissionScope!!
+        val exec = emitDispatcher!!
+        minuteStepJob = scope.launch {
+            while (isActive) {
+                delay(minuteStepIntervalMs)
+                withContext(exec) {
+                    rawIngress.emit(
+                        MotionStepMinuteTickFrame(
+                            correlationId = CorrelationId("motion-step-${UUID.randomUUID()}"),
+                            capturedAtEpochMillis = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     override suspend fun onDeactivate() {
-        idleHeartbeatJob?.cancel()
-        idleHeartbeatJob = null
+        minuteStepJob?.cancel()
+        minuteStepJob = null
+        emitDispatcher?.close()
+        emitDispatcher = null
         sensorManager.unregisterListener(sensorListener)
         handlerThread?.quitSafely()
         handlerThread = null

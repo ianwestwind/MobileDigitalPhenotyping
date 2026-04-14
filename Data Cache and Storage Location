@@ -1,0 +1,42 @@
+
+
+
+Audio module
+Local storage (…/files/audio/; later trasnfered in batch to CloudStorage and/or Firestore; eg., at midnight): 
+1. audio file (dedup'd and suppressed) named with 'audio + date/timestsamp in format of yyyymmddhhmmSSsss'
+2. audio.signal.rmsDb calculated from audio.dedupe.suppressed + metadata + yyyymmddhhmmSSsss + url to audio file in cloud storage
+
+Cache (in memory; 30-min window): 
+1. audio.signal.rmsDb + metadata + yyyymmddhhmmSSsss
+
+---
+
+Motion module 
+Local storage (…/files/motion/; later trasnfered in batch to Firestore; eg., at midnight):
+1. motion.imu.accel.{x,y,z}Ms2 + metadata + yyyymmddhhmmSSsss
+2. motion.imu.gyro.{x,y,z}RadS + metadata + yyyymmddhhmmSSsss
+3. motion.step.sessionTotal + metadata + yyyymmddhhmmSSsss
+
+Cache (in memory; 30-min window): 
+1. motion.step.sessionTotal + metadata + yyyymmddhhmmSSsss
+
+
+---
+
+GPS module 
+
+Local storage (…/files/gps/; later trasnfered in batch to Firestore; eg., at midnight):
+1. [gps.fix.latitudeDegrees, gps.fix.longitudeDegrees, gps.weather.sunScore0To10, date/timestsamp in format of yyyymmddhhmmSSsss + metadata] -- either array or json format.
+
+Cache (in memory; 30-min window): 
+1. gps.weather.sunScore0To10 + metadata + yyyymmddhhmmSSsss
+
+---
+
+Screenshot module (…/files/screenshot/; later trasnfered in batch to CloudStorage and/or Firestore; eg., at midnight)
+Local storage (…/files/gps/; ):
+1. screenshot image file (dedup'd and suppressed) named with 'screenshot + date/timestsamp in format of yyyymmddhhmmSSsss'
+2. screenshot.sentiment.score + metadata + yyyymmddhhmmSSsss + url to screenshot image file in cloud storage
+
+Cache (in memory; 30-min window): 
+1. screenshot.sentiment.score + metadata + yyyymmddhhmmSSsss

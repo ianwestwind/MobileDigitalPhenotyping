@@ -3,6 +3,7 @@ package com.app.modules.screenshot
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Bitmap.CompressFormat
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
@@ -28,10 +29,12 @@ import kotlinx.coroutines.withContext
 import org.tensorflow.lite.Interpreter
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.time.Instant
 
 private const val KEY_SENTIMENT_SCORE: String = "screenshot.sentiment.score"
+private const val PNG_MIME: String = "image/png"
 
 /**
  * Screenshots: **Google ML Kit Text Recognition** on the raster, then **on-device TFLite** regression
@@ -48,6 +51,8 @@ class ScreenshotAdapter(
     private val acquisitionMethodLabel: String = "MLKit.textRecognition+TFLite.sentiment",
     private val ufsEnvelopeVersion: String = UfsEnvelopeVersions.V1,
     private val sentimentAssetPath: String = "screenshot_sentiment.tflite",
+    /** Downscale factor applied to the stored/uploaded PNG. 1.0 preserves original pixels. */
+    private val storageDownscaleFactor: Double = 0.5,
 ) : BaseAdapter(adapterId = adapterId, modality = ModalityKind.SCREENSHOT) {
 
     private val textRecognizer by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
@@ -102,7 +107,10 @@ class ScreenshotAdapter(
                     "ocrLen=${fullText.length} timestamp=${raw.capturedAtEpochMillis}",
             )
             if (localFileSink != null && raw.encodedBytes.isNotEmpty()) {
-                val plainSha = sha256Hex(raw.encodedBytes)
+                // Store/upload a downscaled PNG, but keep OCR on the original bitmap for quality.
+                val storedPng = encodeStoredPng(bitmap, storageDownscaleFactor)
+                if (storedPng.isNotEmpty()) {
+                    val plainSha = sha256Hex(storedPng)
                 val shouldWrite = rasterDedupeMutex.withLock {
                     if (plainSha == lastRasterPlainSha256Hex) {
                         false
@@ -113,11 +121,11 @@ class ScreenshotAdapter(
                 }
                 if (shouldWrite) {
                     val stamp = StorageArtifactFilename.stampUtc(raw.capturedAtEpochMillis)
-                    val rel = "screenshot_$stamp.bin"
+                    val rel = "screenshot_$stamp.png"
                     localFileSink.writeBytes(
                         modality = ModalityKind.SCREENSHOT,
                         relativePath = rel,
-                        bytes = raw.encodedBytes,
+                        bytes = storedPng,
                         dedupeContentKey = null,
                     )
                 } else {
@@ -128,6 +136,7 @@ class ScreenshotAdapter(
                         dataType = "raster_sha256",
                         detail = "[ADAPTER][SCREENSHOT_MODULE] Raster dedupe suppressed duplicate plainSha256",
                     )
+                }
                 }
             }
             return buildPoint(
@@ -187,6 +196,27 @@ class ScreenshotAdapter(
     private fun sha256Hex(bytes: ByteArray): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
         return digest.joinToString("") { b -> "%02x".format(b) }
+    }
+
+    private fun encodeStoredPng(bitmap: Bitmap, downscaleFactor: Double): ByteArray {
+        val f = downscaleFactor.coerceIn(0.05, 1.0)
+        val b = if (f == 1.0) {
+            bitmap
+        } else {
+            val w = (bitmap.width * f).toInt().coerceAtLeast(1)
+            val h = (bitmap.height * f).toInt().coerceAtLeast(1)
+            Bitmap.createScaledBitmap(bitmap, w, h, true)
+        }
+        return try {
+            ByteArrayOutputStream().use { bos ->
+                b.compress(CompressFormat.PNG, /*ignored*/ 100, bos)
+                bos.toByteArray()
+            }
+        } finally {
+            if (b !== bitmap && !b.isRecycled) {
+                b.recycle()
+            }
+        }
     }
 
     /**

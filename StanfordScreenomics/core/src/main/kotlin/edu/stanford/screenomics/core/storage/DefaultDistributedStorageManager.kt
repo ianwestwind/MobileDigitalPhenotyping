@@ -153,12 +153,12 @@ class DefaultDistributedStorageManager(
                 }
             }
             ModalityKind.SCREENSHOT -> {
-                val rel = "screenshot_$stamp.bin"
+                val rel = "screenshot_$stamp.png"
                 scope.launch {
                     val bytes = localFileSink.readBytes(ModalityKind.SCREENSHOT, rel) ?: return@launch
                     if (!BatchUploadPolicyPlaceholder.shouldEnqueueMediaUpload("screenshot/$corr", bytes.size)) return@launch
                     val cloudPath = "${ModalityStorageDirectoryName.forModality(ModalityKind.SCREENSHOT)}/$rel"
-                    val url = cloudMediaBridge.enqueueMediaObject(cloudPath, bytes, "application/octet-stream")
+                    val url = cloudMediaBridge.enqueueMediaObject(cloudPath, bytes, "image/png")
                     if (url != null) {
                         localFileSink.deleteFile(ModalityKind.SCREENSHOT, rel)
                     }
@@ -170,18 +170,19 @@ class DefaultDistributedStorageManager(
 
     private fun buildMotionLocalJson(p: UnifiedDataPoint): String {
         val d = p.data
-        fun num(key: String): Double = (d[key] as? Number)?.toDouble() ?: Double.NaN
-        fun long(key: String): Long = (d[key] as? Number)?.toLong() ?: -1L
         val ts = p.metadata.timestamp.toEpochMilli()
         val m = p.metadata
+        val dataFields = buildString {
+            var first = true
+            for ((k, v) in d) {
+                if (!first) append(',')
+                first = false
+                append('"').append(jsonEscape(k)).append("\":")
+                append(jsonEncodeDataValue(v))
+            }
+        }
         return (
-            "{\"motion.imu.accel.xMs2\":${num("motion.imu.accel.xMs2")}," +
-                "\"motion.imu.accel.yMs2\":${num("motion.imu.accel.yMs2")}," +
-                "\"motion.imu.accel.zMs2\":${num("motion.imu.accel.zMs2")}," +
-                "\"motion.imu.gyro.xRadS\":${num("motion.imu.gyro.xRadS")}," +
-                "\"motion.imu.gyro.yRadS\":${num("motion.imu.gyro.yRadS")}," +
-                "\"motion.imu.gyro.zRadS\":${num("motion.imu.gyro.zRadS")}," +
-                "\"motion.step.sessionTotal\":${long("motion.step.sessionTotal")}," +
+            "{$dataFields," +
                 "\"timestampEpochMillis\":$ts," +
                 "\"metadata\":{" +
                 "\"source\":\"${jsonEscape(m.source)}\"," +
@@ -192,6 +193,13 @@ class DefaultDistributedStorageManager(
                 "\"captureSessionId\":\"${jsonEscape(m.captureSessionId)}\"," +
                 "\"correlationId\":\"${jsonEscape(d[UfsReservedDataKeys.CORRELATION_ID] as? String ?: "")}\"}"
             )
+    }
+
+    private fun jsonEncodeDataValue(v: Any): String = when (v) {
+        is Number -> v.toString()
+        is Boolean -> v.toString()
+        is String -> "\"${jsonEscape(v)}\""
+        else -> "\"${jsonEscape(v.toString())}\""
     }
 
     private fun buildGpsLocalJson(p: UnifiedDataPoint): String {
