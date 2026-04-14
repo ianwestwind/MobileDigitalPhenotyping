@@ -29,6 +29,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -132,6 +133,7 @@ class ModalityCollectionService : Service() {
             nodeId = "audio-node-1",
             captureSessionId = runtime.captureSessionId,
             cache = runtime.audioCache,
+            localFileSink = runtime.modalityLocalFileSink,
             pipelineDispatchers = ts.modulePipelineDispatchers(ModalityKind.AUDIO),
         )
         val motion = MotionModule.create(
@@ -163,6 +165,7 @@ class ModalityCollectionService : Service() {
                 }
             },
             cache = runtime.screenshotCache,
+            localFileSink = runtime.modalityLocalFileSink,
             pipelineDispatchers = ts.modulePipelineDispatchers(ModalityKind.SCREENSHOT),
         )
 
@@ -216,9 +219,11 @@ class ModalityCollectionService : Service() {
         evictionTicker = null
         locationReader?.stop()
         locationReader = null
-        collectionJobs.forEach { it.cancel() }
+        val collectionJobsSnapshot = collectionJobs.toList()
         collectionJobs.clear()
+        collectionJobsSnapshot.forEach { it.cancel() }
         runBlocking(Dispatchers.Default) {
+            collectionJobsSnapshot.joinAll()
             for (node in activeNodes) {
                 runCatching { node.deactivate() }
             }

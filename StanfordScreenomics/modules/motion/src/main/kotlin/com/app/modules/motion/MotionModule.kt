@@ -16,6 +16,9 @@ object MotionModule {
         captureSessionId: String,
         producerAdapterId: String = "default-motion-adapter",
         samplingDelayUs: Int = SensorManager.SENSOR_DELAY_GAME,
+        idleAccelDelayUs: Int = SensorManager.SENSOR_DELAY_NORMAL,
+        stationaryHoldNs: Long = 5_000_000_000L,
+        idleHeartbeatIntervalMs: Long = 55_000L,
         pipelineDispatchers: ModulePipelineDispatchers? = null,
         cache: MotionCache? = null,
         onAfterUnifiedPointCommittedOutsideLock: suspend (UnifiedDataPoint) -> Unit = {},
@@ -33,6 +36,9 @@ object MotionModule {
             cache = resolvedCache,
             pipelineDispatchers = pipelineDispatchers ?: ModulePipelineDispatchers(),
             samplingDelayUs = samplingDelayUs,
+            idleAccelDelayUs = idleAccelDelayUs,
+            stationaryHoldNs = stationaryHoldNs,
+            idleHeartbeatIntervalMs = idleHeartbeatIntervalMs,
         )
     }
 }

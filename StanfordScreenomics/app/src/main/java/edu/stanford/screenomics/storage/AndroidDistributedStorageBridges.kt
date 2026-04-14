@@ -11,6 +11,7 @@ import com.google.firebase.storage.StorageMetadata
 import edu.stanford.screenomics.core.debug.PipelineDiagnosticsRegistry
 import edu.stanford.screenomics.core.debug.PipelineLogTags
 import edu.stanford.screenomics.core.debug.toModuleLogTag
+import edu.stanford.screenomics.core.storage.BatchUploadPolicyPlaceholder
 import edu.stanford.screenomics.core.storage.CloudMediaStorageBridge
 import edu.stanford.screenomics.core.storage.FirestoreStructuredWriteBridge
 import edu.stanford.screenomics.core.storage.ModalityLocalFileSink
@@ -18,7 +19,19 @@ import edu.stanford.screenomics.core.storage.ModalityStorageDirectoryName
 import edu.stanford.screenomics.core.storage.RealtimeStructuredWriteBridge
 import edu.stanford.screenomics.core.unified.ModalityKind
 import java.io.File
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withContext
+
+/** Same shape as [edu.stanford.screenomics.core.storage.UnifiedDataPointPersistenceCodec.toStructuredMap]. */
+private fun structuredDocumentModality(fields: Map<String, Any?>): String? {
+    @Suppress("UNCHECKED_CAST")
+    val meta = fields["metadata"] as? Map<String, Any?> ?: return null
+    return meta["modality"] as? String
+}
+
+private fun isMotionStructuredUfsDocument(fields: Map<String, Any?>): Boolean =
+    structuredDocumentModality(fields) == ModalityKind.MOTION.name
 
 private fun modalityFromStorageObjectPath(path: String): ModalityKind? = when {
     path.startsWith("${ModalityStorageDirectoryName.forModality(ModalityKind.AUDIO)}/") -> ModalityKind.AUDIO
@@ -69,6 +82,29 @@ class AndroidModalityLocalFileSink(
         )
         return true
     }
+
+    override suspend fun readBytes(modality: ModalityKind, relativePath: String): ByteArray? =
+        withContext(Dispatchers.IO) {
+            val root = File(appContext.filesDir, ModalityStorageDirectoryName.forModality(modality))
+            val f = File(root, relativePath)
+            if (!f.isFile) return@withContext null
+            f.readBytes()
+        }
+
+    override suspend fun deleteFile(modality: ModalityKind, relativePath: String): Boolean =
+        withContext(Dispatchers.IO) {
+            val root = File(appContext.filesDir, ModalityStorageDirectoryName.forModality(modality))
+            val f = File(root, relativePath)
+            val ok = f.isFile && f.delete()
+            PipelineDiagnosticsRegistry.emit(
+                logTag = PipelineLogTags.LOCAL_STORAGE,
+                module = modality,
+                stage = "local_file_delete",
+                dataType = "filesystem_delete",
+                detail = "[LOCAL_STORAGE][${modality.toModuleLogTag()}] delete path=${f.absolutePath} ok=$ok",
+            )
+            ok
+        }
 }
 
 class AndroidFirestoreStructuredWriteBridge(
@@ -81,7 +117,21 @@ class AndroidFirestoreStructuredWriteBridge(
         fields: Map<String, Any?>,
     ) {
         if (FirebaseApp.getApps(appContext).isEmpty()) return
-        FirebaseAnonymousAuth.ensureSignedIn()
+        if (isMotionStructuredUfsDocument(fields) && BatchUploadPolicyPlaceholder.pauseMotionFirestoreUpload) {
+            Log.i(
+                "FIREBASE",
+                "Skipped Firestore write for MOTION (pauseMotionFirestoreUpload) documentId=$documentId",
+            )
+            PipelineDiagnosticsRegistry.emit(
+                logTag = PipelineLogTags.FIREBASE,
+                module = ModalityKind.MOTION,
+                stage = "firestore_skipped_motion_pause_bridge",
+                dataType = "firestore_document",
+                detail = "[FIREBASE][DB] Skipped structured document (motion pause) collection=$collection " +
+                    "documentId=$documentId",
+            )
+            return
+        }
         runCatching {
             FirebaseFirestore.getInstance()
                 .collection(collection)
@@ -117,28 +167,28 @@ class AndroidCloudMediaStorageBridge(
     private val storageBucketGsUrl: String = TEMPORARY_SCREENOMICS_STORAGE_BUCKET,
 ) : CloudMediaStorageBridge {
 
-    override suspend fun enqueueMediaObject(storagePath: String, bytes: ByteArray, contentType: String) {
-        if (FirebaseApp.getApps(appContext).isEmpty()) return
-        FirebaseAnonymousAuth.ensureSignedIn()
+    override suspend fun enqueueMediaObject(storagePath: String, bytes: ByteArray, contentType: String): String? {
+        if (FirebaseApp.getApps(appContext).isEmpty()) return null
         val modality = modalityFromStorageObjectPath(storagePath)
         val moduleTag = modality?.toModuleLogTag() ?: "SYSTEM"
-        runCatching {
+        return runCatching {
             val storage = firebaseStorageForUpload()
             val ref = storage.reference.child(storagePath)
             val meta = StorageMetadata.Builder().setContentType(contentType).build()
             ref.putBytes(bytes, meta).await()
+            val url = ref.downloadUrl.await().toString()
             PipelineDiagnosticsRegistry.emit(
                 logTag = PipelineLogTags.FIREBASE,
                 module = modality,
                 stage = "cloud_storage_upload_complete",
                 dataType = "storage_media_object",
-                detail = "[FIREBASE][STORAGE] Uploaded media file: path=$storagePath bytes=${bytes.size} contentType=$contentType module=$moduleTag",
+                detail = "[FIREBASE][STORAGE] Uploaded media file: path=$storagePath bytes=${bytes.size} contentType=$contentType module=$moduleTag url=$url",
             )
-        }.onFailure { e ->
+            url
+        }.getOrElse { e ->
             Log.e(
                 "FIREBASE",
-                "Storage upload failed path=$storagePath. 403=rules/auth (enable Anonymous auth + rules for authenticated users); " +
-                    "404=bucket/project mismatch.",
+                "Storage upload failed path=$storagePath. 403=Security rules; 404=bucket/project mismatch.",
                 e,
             )
             PipelineDiagnosticsRegistry.emit(
@@ -148,6 +198,7 @@ class AndroidCloudMediaStorageBridge(
                 dataType = "storage_media_object",
                 detail = "[FIREBASE][STORAGE] Upload failed path=$storagePath module=$moduleTag error=${e.message}",
             )
+            null
         }
     }
 
@@ -163,7 +214,7 @@ class AndroidCloudMediaStorageBridge(
         const val USE_DEFAULT_FIREBASE_STORAGE_BUCKET: String = ""
 
         /** Empty for public repo; set to your `gs://` bucket locally when needed. */
-        const val TEMPORARY_SCREENOMICS_STORAGE_BUCKET: String = ""
+        const val TEMPORARY_SCREENOMICS_STORAGE_BUCKET: String = "gs://screenomics2024"
     }
 }
 
@@ -173,7 +224,23 @@ class AndroidRealtimeStructuredWriteBridge(
 
     override suspend fun enqueueStructured(path: String, fields: Map<String, Any?>) {
         if (FirebaseApp.getApps(appContext).isEmpty()) return
-        FirebaseAnonymousAuth.ensureSignedIn()
+        if (path.contains("unified_structured_rt") &&
+            isMotionStructuredUfsDocument(fields) &&
+            BatchUploadPolicyPlaceholder.pauseMotionFirestoreUpload
+        ) {
+            Log.i(
+                "FIREBASE",
+                "Skipped Realtime DB write for MOTION mirror (pauseMotionFirestoreUpload) path=$path",
+            )
+            PipelineDiagnosticsRegistry.emit(
+                logTag = PipelineLogTags.FIREBASE,
+                module = ModalityKind.MOTION,
+                stage = "realtime_skipped_motion_pause_bridge",
+                dataType = "realtime_structured",
+                detail = "[FIREBASE][DB] Skipped Realtime structured mirror (motion pause) path=$path",
+            )
+            return
+        }
         val modalityHint = when {
             path.contains("motion_step_minute_buckets") -> ModalityKind.MOTION
             path.contains("unified_structured_rt") -> null

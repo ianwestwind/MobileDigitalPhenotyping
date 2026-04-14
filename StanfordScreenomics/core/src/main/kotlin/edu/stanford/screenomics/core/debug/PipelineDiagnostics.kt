@@ -82,8 +82,6 @@ object PipelineDiagnosticsFormat {
         val keys = p.data.keys.sorted()
         val sample = keys.take(16).joinToString(separator = "; ") { k -> "$k=${p.data[k]}" }
         return "metadata={ ${dataDescription(p.metadata)} } " +
-            "schema={ schemaId=${p.schema.schemaId} schemaRevision=${p.schema.schemaRevision} " +
-            "attributeCount=${p.schema.attributes.size} } " +
             "dataKeys=[$keys] dataSample=[$sample]"
     }
 }

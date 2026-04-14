@@ -5,9 +5,9 @@ import edu.stanford.screenomics.core.unified.ModalityKind
 /**
  * Layer-2 per-modality **local** byte persistence (isolated roots; no cross-modality paths).
  */
-fun interface ModalityLocalFileSink {
+interface ModalityLocalFileSink {
     /**
-     * @param relativePath path segments under the modality root (e.g. `windows/2026/clip.bin`).
+     * @param relativePath path segments under the modality root (e.g. `audio_20260101120000123.bin`).
      * @return true if bytes were durably written (or deduped skip treated as success).
      */
     suspend fun writeBytes(
@@ -16,4 +16,8 @@ fun interface ModalityLocalFileSink {
         bytes: ByteArray,
         dedupeContentKey: String?,
     ): Boolean
+
+    suspend fun readBytes(modality: ModalityKind, relativePath: String): ByteArray?
+
+    suspend fun deleteFile(modality: ModalityKind, relativePath: String): Boolean
 }

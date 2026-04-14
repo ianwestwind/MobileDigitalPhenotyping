@@ -103,6 +103,7 @@ class MainActivity : AppCompatActivity() {
                 motionCache = motionCache,
                 gpsCache = gpsCache,
                 screenshotCache = screenshotCache,
+                modalityLocalFileSink = localSink,
                 distributedStorageManager = distributedStorageManager,
                 cacheManager = cacheManager,
                 taskScheduler = taskScheduler,

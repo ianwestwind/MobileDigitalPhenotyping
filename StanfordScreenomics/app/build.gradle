@@ -49,7 +49,6 @@ android {
 
 dependencies {
     implementation platform('com.google.firebase:firebase-bom:33.7.0')
-    implementation 'com.google.firebase:firebase-auth-ktx'
     implementation 'com.google.firebase:firebase-firestore-ktx'
     implementation 'com.google.firebase:firebase-storage-ktx'
     implementation 'com.google.firebase:firebase-database-ktx'
@@ -67,5 +66,7 @@ dependencies {
     implementation 'androidx.constraintlayout:constraintlayout:2.2.0'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:2.8.7'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
-    implementation 'org.tensorflow:tensorflow-lite:2.16.1'
+    // 16 KB page-size compatible runtime (replaces org.tensorflow:tensorflow-lite; same org.tensorflow.lite.Interpreter API).
+    // 1.4.x: 16 KB–aligned native libs; 2.1.x requires Kotlin 2.2+ metadata (project is on Kotlin 2.0.21).
+    implementation 'com.google.ai.edge.litert:litert:1.4.1'
 }

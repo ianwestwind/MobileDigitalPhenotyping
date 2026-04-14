@@ -1,8 +1,8 @@
 package edu.stanford.screenomics.core.storage
 
 /**
- * Async Firebase **Cloud Storage** uploads for deduplicated compressed media blobs.
+ * Firebase **Cloud Storage** uploads. Returns **download URL** on success, else null.
  */
-fun interface CloudMediaStorageBridge {
-    suspend fun enqueueMediaObject(storagePath: String, bytes: ByteArray, contentType: String)
+interface CloudMediaStorageBridge {
+    suspend fun enqueueMediaObject(storagePath: String, bytes: ByteArray, contentType: String): String?
 }

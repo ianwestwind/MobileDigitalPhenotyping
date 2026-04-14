@@ -3,6 +3,7 @@ package com.app.modules.screenshot
 import android.content.Context
 import android.graphics.Bitmap
 import edu.stanford.screenomics.core.module.template.ModulePipelineDispatchers
+import edu.stanford.screenomics.core.storage.ModalityLocalFileSink
 import edu.stanford.screenomics.core.unified.UnifiedDataPoint
 
 /**
@@ -20,6 +21,7 @@ object ScreenshotModule {
         sentimentAssetPath: String = "screenshot_sentiment.tflite",
         pipelineDispatchers: ModulePipelineDispatchers? = null,
         cache: ScreenshotCache? = null,
+        localFileSink: ModalityLocalFileSink? = null,
         onAfterUnifiedPointCommittedOutsideLock: suspend (UnifiedDataPoint) -> Unit = {},
     ): ScreenshotDataNode {
         val adapter = ScreenshotAdapter(
@@ -27,6 +29,7 @@ object ScreenshotModule {
             captureSessionId = captureSessionId,
             producerNodeId = nodeId,
             appContext = appContext.applicationContext,
+            localFileSink = localFileSink,
             sentimentAssetPath = sentimentAssetPath,
         )
         val resolvedCache = cache ?: ScreenshotCache(onAfterUnifiedPointCommittedOutsideLock = onAfterUnifiedPointCommittedOutsideLock)

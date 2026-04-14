@@ -25,8 +25,8 @@ subprojects { Project sub ->
                     return
                 }
                 def n = f.name
-                // macOS duplicate names: "file 2.xml", "file 3.xml", … (invalid Android resource names)
-                if (!(n ==~ / \d+\.(class|dex|xml|flat)$/)) {
+                // macOS duplicate names: "file 2.xml", "Class\$Inner 2.dex", … (invalid / duplicate outputs)
+                if (!(n ==~ /.* \d+\.(class|dex|xml|flat)$/)) {
                     return
                 }
                 f.delete()

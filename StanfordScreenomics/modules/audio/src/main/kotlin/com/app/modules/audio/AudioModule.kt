@@ -4,6 +4,7 @@ import android.content.Context
 import android.media.AudioFormat
 import android.media.MediaRecorder
 import edu.stanford.screenomics.core.module.template.ModulePipelineDispatchers
+import edu.stanford.screenomics.core.storage.ModalityLocalFileSink
 import edu.stanford.screenomics.core.unified.UnifiedDataPoint
 
 /**
@@ -22,12 +23,14 @@ object AudioModule {
         audioSource: Int = MediaRecorder.AudioSource.DEFAULT,
         pipelineDispatchers: ModulePipelineDispatchers? = null,
         cache: AudioCache? = null,
+        localFileSink: ModalityLocalFileSink? = null,
         onAfterUnifiedPointCommittedOutsideLock: suspend (UnifiedDataPoint) -> Unit = {},
     ): AudioDataNode {
         val adapter = AudioAdapter(
             adapterId = producerAdapterId,
             captureSessionId = captureSessionId,
             producerNodeId = nodeId,
+            localFileSink = localFileSink,
         )
         val resolvedCache = cache ?: AudioCache(onAfterUnifiedPointCommittedOutsideLock = onAfterUnifiedPointCommittedOutsideLock)
         return AudioDataNode(

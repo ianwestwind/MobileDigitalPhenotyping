@@ -6,19 +6,16 @@ import edu.stanford.screenomics.core.debug.toModuleLogTag
 import edu.stanford.screenomics.core.unified.ModalityKind
 import edu.stanford.screenomics.core.unified.UfsReservedDataKeys
 import edu.stanford.screenomics.core.unified.UnifiedDataPoint
-import java.util.Base64
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 /**
- * Default [DistributedStorageManager]: async fan-out on **[Dispatchers.IO]** (parallel to edge/Default workloads),
- * honoring [BatchUploadPolicyPlaceholder] gates.
+ * Firestore/RTDB structured fan-out, Cloud Storage for audio/screenshot bytes, minimal per-modality local artifacts.
+ * Local media (audio/screenshot binaries) and motion/gps JSON are removed after successful cloud/Firestore transfer.
  */
 class DefaultDistributedStorageManager(
     private val localFileSink: ModalityLocalFileSink,
@@ -27,17 +24,11 @@ class DefaultDistributedStorageManager(
     private val realtimeBridge: RealtimeStructuredWriteBridge,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
     private val firestoreCollection: String = "unified_points",
-    private val rtdbMotionStepsRoot: String = "motion_step_minute_buckets",
     private val rtdbStructuredMirrorRoot: String = "unified_structured_rt",
 ) : DistributedStorageManager {
 
     private val job = SupervisorJob()
     private val scope = CoroutineScope(job + ioDispatcher)
-
-    private val motionRtdbMutex = Mutex()
-    private var motionBucketOpen: Long = Long.MIN_VALUE
-    private var motionStepAtOpenBucket: Long = 0L
-    private var motionPreviousFrameStepTotal: Long = 0L
 
     override suspend fun onUnifiedPointCommitted(point: UnifiedDataPoint) {
         val modality = point.metadata.modality
@@ -51,202 +42,188 @@ class DefaultDistributedStorageManager(
             detail = "[UPLOAD_QUEUE] Upload pipeline triggered for correlationId=$correlation modality=$modality",
         )
         val structuredOk = BatchUploadPolicyPlaceholder.shouldEnqueueStructuredWrite(correlation)
-        PipelineDiagnosticsRegistry.emit(
-            logTag = PipelineLogTags.UPLOAD_QUEUE,
-            module = modality,
-            stage = "distributed_storage_gate",
-            dataType = "${modality.name.lowercase()}_structured_enqueue",
-            detail = "[UPLOAD_QUEUE] structuredWriteAllowed=$structuredOk correlationId=$correlation " +
-                "docFieldCount=${doc.size}",
-        )
-        if (!structuredOk) {
-            PipelineDiagnosticsRegistry.emit(
-                logTag = PipelineLogTags.UPLOAD_QUEUE,
-                module = modality,
-                stage = "structured_write_skipped",
-                dataType = "policy_gate",
-                detail = "[UPLOAD_QUEUE] Structured Firestore/RTDB mirror skipped by batch policy correlationId=$correlation",
-            )
-        }
-        if (structuredOk) {
+        val epochMs = point.metadata.timestamp.toEpochMilli()
+        val stamp = StorageArtifactFilename.stampUtc(epochMs)
+
+        if (modality == ModalityKind.MOTION || modality == ModalityKind.GPS) {
+            val motionRel = if (modality == ModalityKind.MOTION) "motion_$stamp.json" else null
+            val gpsRel = if (modality == ModalityKind.GPS) "gps_$stamp.json" else null
             scope.launch {
-                PipelineDiagnosticsRegistry.emit(
-                    logTag = PipelineLogTags.FIREBASE,
-                    module = modality,
-                    stage = "firestore_enqueue",
-                    dataType = "firestore_document",
-                    detail = "[FIREBASE][Firestore] merge set collection=$firestoreCollection documentId=$correlation",
-                )
-                firestoreBridge.enqueueStructuredDocument(
-                    collection = firestoreCollection,
-                    documentId = correlation,
-                    fields = doc,
-                )
-                if (BatchUploadPolicyPlaceholder.shouldMirrorFullStructuredDocumentToRealtime()) {
-                    PipelineDiagnosticsRegistry.emit(
-                        logTag = PipelineLogTags.FIREBASE,
-                        module = modality,
-                        stage = "realtime_mirror_enqueue",
-                        dataType = "realtime_structured",
-                        detail = "[FIREBASE][DB] mirror path=$rtdbStructuredMirrorRoot/$correlation",
-                    )
-                    realtimeBridge.enqueueStructured(
-                        path = "$rtdbStructuredMirrorRoot/$correlation",
+                withContext(ioDispatcher) {
+                    if (motionRel != null) {
+                        val json = buildMotionLocalJson(point)
+                        localFileSink.writeBytes(
+                            modality = ModalityKind.MOTION,
+                            relativePath = motionRel,
+                            bytes = json.toByteArray(Charsets.UTF_8),
+                            dedupeContentKey = null,
+                        )
+                    }
+                    if (gpsRel != null) {
+                        val json = buildGpsLocalJson(point)
+                        localFileSink.writeBytes(
+                            modality = ModalityKind.GPS,
+                            relativePath = gpsRel,
+                            bytes = json.toByteArray(Charsets.UTF_8),
+                            dedupeContentKey = null,
+                        )
+                    }
+                }
+                if (structuredOk) {
+                    val skipMotionCloud =
+                        modality == ModalityKind.MOTION && BatchUploadPolicyPlaceholder.pauseMotionFirestoreUpload
+                    if (skipMotionCloud) {
+                        PipelineDiagnosticsRegistry.emit(
+                            logTag = PipelineLogTags.UPLOAD_QUEUE,
+                            module = ModalityKind.MOTION,
+                            stage = "firestore_skipped_motion_pause",
+                            dataType = "structured_write",
+                            detail = "[UPLOAD_QUEUE] Firestore/RTDB structured upload skipped for motion " +
+                                "(BatchUploadPolicyPlaceholder.pauseMotionFirestoreUpload=true) correlationId=$correlation",
+                        )
+                    }
+                    val firestoreOk = if (skipMotionCloud) {
+                        false
+                    } else {
+                        runCatching {
+                            firestoreBridge.enqueueStructuredDocument(
+                                collection = firestoreCollection,
+                                documentId = correlation,
+                                fields = doc,
+                            )
+                        }.isSuccess
+                    }
+                    if (firestoreOk) {
+                        withContext(ioDispatcher) {
+                            if (motionRel != null) {
+                                localFileSink.deleteFile(ModalityKind.MOTION, motionRel)
+                            }
+                            if (gpsRel != null) {
+                                localFileSink.deleteFile(ModalityKind.GPS, gpsRel)
+                            }
+                        }
+                    }
+                    if (firestoreOk && BatchUploadPolicyPlaceholder.shouldMirrorFullStructuredDocumentToRealtime()) {
+                        runCatching {
+                            realtimeBridge.enqueueStructured(
+                                path = "$rtdbStructuredMirrorRoot/$correlation",
+                                fields = doc,
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (structuredOk) {
+            scope.launch {
+                val firestoreOk = runCatching {
+                    firestoreBridge.enqueueStructuredDocument(
+                        collection = firestoreCollection,
+                        documentId = correlation,
                         fields = doc,
                     )
+                }.isSuccess
+                if (firestoreOk && BatchUploadPolicyPlaceholder.shouldMirrorFullStructuredDocumentToRealtime()) {
+                    runCatching {
+                        realtimeBridge.enqueueStructured(
+                            path = "$rtdbStructuredMirrorRoot/$correlation",
+                            fields = doc,
+                        )
+                    }
                 }
             }
         }
 
-        routeLocalAndCloudMedia(point)
-
-        if (point.metadata.modality == ModalityKind.MOTION) {
-            maybeEmitMotionMinuteRtdb(point, doc)
-        }
+        routeAudioScreenshotMedia(point, stamp)
     }
 
-    private fun routeLocalAndCloudMedia(point: UnifiedDataPoint) {
+    private fun routeAudioScreenshotMedia(point: UnifiedDataPoint, stamp: String) {
         val modality = point.metadata.modality
         val corr = point.data[UfsReservedDataKeys.CORRELATION_ID] as? String ?: return
         when (modality) {
             ModalityKind.AUDIO -> {
-                val b64 = point.data[DistributedStoragePayloadHints.AUDIO_DEFLATED_PCM_BASE64] as? String
-                val sha = point.data[DistributedStoragePayloadHints.AUDIO_DEFLATED_SHA256_HEX] as? String
-                if (b64.isNullOrBlank() || sha.isNullOrBlank()) return
-                if (!BatchUploadPolicyPlaceholder.shouldEnqueueMediaUpload("audio/$corr", b64.length)) {
-                    PipelineDiagnosticsRegistry.emit(
-                        logTag = PipelineLogTags.UPLOAD_QUEUE,
-                        module = modality,
-                        stage = "media_upload_skipped",
-                        dataType = "policy_gate",
-                        detail = "[UPLOAD_QUEUE] Audio media upload skipped by batch policy correlationId=$corr b64Len=${b64.length}",
-                    )
-                    return
-                }
-                val bytes = runCatching { Base64.getDecoder().decode(b64) }.getOrNull() ?: return
+                val rel = "audio_$stamp.bin"
                 scope.launch {
-                    PipelineDiagnosticsRegistry.emit(
-                        logTag = PipelineLogTags.LOCAL_STORAGE,
-                        module = modality,
-                        stage = "local_media_write",
-                        dataType = "compressed_audio_zlib",
-                        detail = "[LOCAL_STORAGE][${modality.toModuleLogTag()}] writing path=windows/$sha.bin.z bytes=${bytes.size}",
-                    )
-                    localFileSink.writeBytes(
-                        modality = modality,
-                        relativePath = "windows/$sha.bin.z",
-                        bytes = bytes,
-                        dedupeContentKey = sha,
-                    )
-                    PipelineDiagnosticsRegistry.emit(
-                        logTag = PipelineLogTags.FIREBASE,
-                        module = modality,
-                        stage = "cloud_storage_enqueue",
-                        dataType = "storage_media_audio",
-                        detail = "[FIREBASE][STORAGE] upload path=${ModalityStorageDirectoryName.forModality(modality)}/$sha.bin.z " +
-                            "bytes=${bytes.size} contentType=application/zlib",
-                    )
-                    cloudMediaBridge.enqueueMediaObject(
-                        storagePath = "${ModalityStorageDirectoryName.forModality(modality)}/$sha.bin.z",
-                        bytes = bytes,
-                        contentType = "application/zlib",
-                    )
+                    val bytes = localFileSink.readBytes(ModalityKind.AUDIO, rel) ?: return@launch
+                    if (!BatchUploadPolicyPlaceholder.shouldEnqueueMediaUpload("audio/$corr", bytes.size)) return@launch
+                    val cloudPath = "${ModalityStorageDirectoryName.forModality(ModalityKind.AUDIO)}/$rel"
+                    val url = cloudMediaBridge.enqueueMediaObject(cloudPath, bytes, "application/zlib")
+                    if (url != null) {
+                        localFileSink.deleteFile(ModalityKind.AUDIO, rel)
+                    }
                 }
             }
             ModalityKind.SCREENSHOT -> {
-                val b64 = point.data[DistributedStoragePayloadHints.SCREENSHOT_DEFLATED_RASTER_BASE64] as? String
-                val sha = point.data[DistributedStoragePayloadHints.SCREENSHOT_DEFLATED_SHA256_HEX] as? String
-                if (b64.isNullOrBlank() || sha.isNullOrBlank()) return
-                if (!BatchUploadPolicyPlaceholder.shouldEnqueueMediaUpload("screenshot/$corr", b64.length)) {
-                    PipelineDiagnosticsRegistry.emit(
-                        logTag = PipelineLogTags.UPLOAD_QUEUE,
-                        module = modality,
-                        stage = "media_upload_skipped",
-                        dataType = "policy_gate",
-                        detail = "[UPLOAD_QUEUE] Screenshot media upload skipped by batch policy correlationId=$corr b64Len=${b64.length}",
-                    )
-                    return
-                }
-                val bytes = runCatching { Base64.getDecoder().decode(b64) }.getOrNull() ?: return
+                val rel = "screenshot_$stamp.bin"
                 scope.launch {
-                    PipelineDiagnosticsRegistry.emit(
-                        logTag = PipelineLogTags.LOCAL_STORAGE,
-                        module = modality,
-                        stage = "local_media_write",
-                        dataType = "compressed_screenshot_zlib",
-                        detail = "[LOCAL_STORAGE][${modality.toModuleLogTag()}] writing path=frames/$sha.png.z bytes=${bytes.size}",
-                    )
-                    localFileSink.writeBytes(
-                        modality = modality,
-                        relativePath = "frames/$sha.png.z",
-                        bytes = bytes,
-                        dedupeContentKey = sha,
-                    )
-                    PipelineDiagnosticsRegistry.emit(
-                        logTag = PipelineLogTags.FIREBASE,
-                        module = modality,
-                        stage = "cloud_storage_enqueue",
-                        dataType = "storage_media_screenshot",
-                        detail = "[FIREBASE][STORAGE] upload path=${ModalityStorageDirectoryName.forModality(modality)}/$sha.png.z " +
-                            "bytes=${bytes.size} contentType=application/zlib",
-                    )
-                    cloudMediaBridge.enqueueMediaObject(
-                        storagePath = "${ModalityStorageDirectoryName.forModality(modality)}/$sha.png.z",
-                        bytes = bytes,
-                        contentType = "application/zlib",
-                    )
+                    val bytes = localFileSink.readBytes(ModalityKind.SCREENSHOT, rel) ?: return@launch
+                    if (!BatchUploadPolicyPlaceholder.shouldEnqueueMediaUpload("screenshot/$corr", bytes.size)) return@launch
+                    val cloudPath = "${ModalityStorageDirectoryName.forModality(ModalityKind.SCREENSHOT)}/$rel"
+                    val url = cloudMediaBridge.enqueueMediaObject(cloudPath, bytes, "application/octet-stream")
+                    if (url != null) {
+                        localFileSink.deleteFile(ModalityKind.SCREENSHOT, rel)
+                    }
                 }
             }
-            ModalityKind.GPS,
-            ModalityKind.MOTION,
-            -> Unit
+            else -> Unit
         }
     }
 
-    private data class MotionMinuteRtdbWrite(
-        val path: String,
-        val fields: Map<String, Any?>,
-    )
+    private fun buildMotionLocalJson(p: UnifiedDataPoint): String {
+        val d = p.data
+        fun num(key: String): Double = (d[key] as? Number)?.toDouble() ?: Double.NaN
+        fun long(key: String): Long = (d[key] as? Number)?.toLong() ?: -1L
+        val ts = p.metadata.timestamp.toEpochMilli()
+        val m = p.metadata
+        return (
+            "{\"motion.imu.accel.xMs2\":${num("motion.imu.accel.xMs2")}," +
+                "\"motion.imu.accel.yMs2\":${num("motion.imu.accel.yMs2")}," +
+                "\"motion.imu.accel.zMs2\":${num("motion.imu.accel.zMs2")}," +
+                "\"motion.imu.gyro.xRadS\":${num("motion.imu.gyro.xRadS")}," +
+                "\"motion.imu.gyro.yRadS\":${num("motion.imu.gyro.yRadS")}," +
+                "\"motion.imu.gyro.zRadS\":${num("motion.imu.gyro.zRadS")}," +
+                "\"motion.step.sessionTotal\":${long("motion.step.sessionTotal")}," +
+                "\"timestampEpochMillis\":$ts," +
+                "\"metadata\":{" +
+                "\"source\":\"${jsonEscape(m.source)}\"," +
+                "\"acquisitionMethod\":\"${jsonEscape(m.acquisitionMethod)}\"," +
+                "\"producerAdapterId\":\"${jsonEscape(m.producerAdapterId)}\"," +
+                "\"producerNodeId\":\"${jsonEscape(m.producerNodeId)}\"" +
+                "}," +
+                "\"captureSessionId\":\"${jsonEscape(m.captureSessionId)}\"," +
+                "\"correlationId\":\"${jsonEscape(d[UfsReservedDataKeys.CORRELATION_ID] as? String ?: "")}\"}"
+            )
+    }
 
-    private suspend fun maybeEmitMotionMinuteRtdb(point: UnifiedDataPoint, doc: Map<String, Any?>) {
-        val stepTotal = (point.data[DistributedStoragePayloadHints.MOTION_STEP_SESSION_TOTAL] as? Number)?.toLong() ?: return
-        val bucket = point.metadata.timestamp.epochSecond / 60L
-        val pending = motionRtdbMutex.withLock {
-            if (motionBucketOpen == Long.MIN_VALUE) {
-                motionBucketOpen = bucket
-                motionStepAtOpenBucket = stepTotal
-                motionPreviousFrameStepTotal = stepTotal
-                return@withLock null
-            }
-            var out: MotionMinuteRtdbWrite? = null
-            if (bucket != motionBucketOpen) {
-                val completedBucket = motionBucketOpen
-                val sumPastMinute =
-                    (motionPreviousFrameStepTotal - motionStepAtOpenBucket).coerceAtLeast(0L)
-                if (BatchUploadPolicyPlaceholder.shouldEnqueueRealtimeStructured("$rtdbMotionStepsRoot/$completedBucket")) {
-                    val m = LinkedHashMap<String, Any?>(doc.size + 4)
-                    m.putAll(doc)
-                    m[DistributedStoragePayloadHints.MOTION_STEP_SUM_PAST_MINUTE] = sumPastMinute
-                    m["motion.step.sessionTotalAtBucketClose"] = motionPreviousFrameStepTotal
-                    val path = "$rtdbMotionStepsRoot/${point.metadata.captureSessionId}/$completedBucket"
-                    out = MotionMinuteRtdbWrite(path = path, fields = m)
-                }
-                motionBucketOpen = bucket
-                motionStepAtOpenBucket = motionPreviousFrameStepTotal
-            }
-            motionPreviousFrameStepTotal = stepTotal
-            out
-        }
-        if (pending != null) {
-            withContext(ioDispatcher) {
-                PipelineDiagnosticsRegistry.emit(
-                    logTag = PipelineLogTags.FIREBASE,
-                    module = ModalityKind.MOTION,
-                    stage = "realtime_motion_minute_bucket",
-                    dataType = "realtime_step_aggregate",
-                    detail = "[FIREBASE][DB] minute bucket path=${pending.path} fieldKeys=${pending.fields.keys.take(12)}",
-                )
-                realtimeBridge.enqueueStructured(pending.path, pending.fields)
+    private fun buildGpsLocalJson(p: UnifiedDataPoint): String {
+        val d = p.data
+        fun num(key: String): Double = (d[key] as? Number)?.toDouble() ?: Double.NaN
+        val ts = p.metadata.timestamp.toEpochMilli()
+        val m = p.metadata
+        return (
+            "{\"gps.fix.latitudeDegrees\":${num("gps.fix.latitudeDegrees")}," +
+                "\"gps.fix.longitudeDegrees\":${num("gps.fix.longitudeDegrees")}," +
+                "\"gps.weather.sunScore0To10\":${num("gps.weather.sunScore0To10")}," +
+                "\"timestampEpochMillis\":$ts," +
+                "\"metadata\":{" +
+                "\"source\":\"${jsonEscape(m.source)}\"," +
+                "\"acquisitionMethod\":\"${jsonEscape(m.acquisitionMethod)}\"," +
+                "\"producerAdapterId\":\"${jsonEscape(m.producerAdapterId)}\"," +
+                "\"producerNodeId\":\"${jsonEscape(m.producerNodeId)}\"" +
+                "}," +
+                "\"captureSessionId\":\"${jsonEscape(m.captureSessionId)}\"," +
+                "\"correlationId\":\"${jsonEscape(d[UfsReservedDataKeys.CORRELATION_ID] as? String ?: "")}\"}"
+            )
+    }
+
+    private fun jsonEscape(s: String): String = buildString {
+        for (c in s) {
+            when (c) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> append(if (c.code < 32) "\\u%04x".format(c.code) else c)
             }
         }
     }

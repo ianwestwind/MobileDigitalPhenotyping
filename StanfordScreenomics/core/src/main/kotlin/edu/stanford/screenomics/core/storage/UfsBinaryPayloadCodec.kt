@@ -11,7 +11,8 @@ import java.util.zip.Deflater
  */
 object UfsBinaryPayloadCodec {
 
-    fun deflatedBase64AndSha256Hex(raw: ByteArray): Pair<String, String> {
+    /** Raw zlib-compressed bytes (no Base64). */
+    fun deflateToBytes(raw: ByteArray): ByteArray {
         val deflater = Deflater(Deflater.BEST_SPEED)
         deflater.setInput(raw)
         deflater.finish()
@@ -24,7 +25,11 @@ object UfsBinaryPayloadCodec {
             }
         }
         deflater.end()
-        val deflated = bos.toByteArray()
+        return bos.toByteArray()
+    }
+
+    fun deflatedBase64AndSha256Hex(raw: ByteArray): Pair<String, String> {
+        val deflated = deflateToBytes(raw)
         val b64 = Base64.getEncoder().encodeToString(deflated)
         val digest = MessageDigest.getInstance("SHA-256").digest(deflated)
         val shaHex = digest.joinToString(separator = "") { b -> "%02x".format(b) }

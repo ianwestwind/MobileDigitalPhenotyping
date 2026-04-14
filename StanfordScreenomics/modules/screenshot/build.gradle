@@ -27,6 +27,7 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0'
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0'
-    implementation 'com.google.mlkit:text-recognition:16.0.1'
-    implementation 'org.tensorflow:tensorflow-lite:2.16.1'
+    // Unbundled Latin OCR via Play Services — avoids shipping libmlkit_google_ocr_pipeline.so in the APK (16 KB policy).
+    implementation 'com.google.android.gms:play-services-mlkit-text-recognition:19.0.1'
+    implementation 'com.google.ai.edge.litert:litert:1.4.1'
 }

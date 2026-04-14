@@ -1,30 +1,19 @@
 package edu.stanford.screenomics.core.storage
 
-import edu.stanford.screenomics.core.unified.CategoricalEntityValueRange
 import edu.stanford.screenomics.core.unified.DataDescription
-import edu.stanford.screenomics.core.unified.DataEntity
-import edu.stanford.screenomics.core.unified.EntityAttributeSpec
-import edu.stanford.screenomics.core.unified.EntityRelationship
-import edu.stanford.screenomics.core.unified.EntityTypeSpec
-import edu.stanford.screenomics.core.unified.EntityValueRange
-import edu.stanford.screenomics.core.unified.NumericEntityValueRange
-import edu.stanford.screenomics.core.unified.OrdinalEntityValueRange
 import edu.stanford.screenomics.core.unified.ProvenanceRecord
-import edu.stanford.screenomics.core.unified.UnboundedEntityValueRange
 import edu.stanford.screenomics.core.unified.UnifiedDataPoint
 import java.time.ZoneOffset
 import java.util.Base64
 
 /**
- * Serializes a [UnifiedDataPoint] into Firestore/RTDB-safe maps with **embedded**
- * [DataDescription] and [DataEntity] (no separate metadata collection).
+ * Serializes a [UnifiedDataPoint] into Firestore/RTDB-safe maps with embedded [DataDescription] (no schema blob).
  */
 object UnifiedDataPointPersistenceCodec {
 
     fun toStructuredMap(point: UnifiedDataPoint): Map<String, Any?> = linkedMapOf(
         "ufsEnvelopeVersion" to point.metadata.ufsEnvelopeVersion,
         "metadata" to encodeDescription(point.metadata),
-        "schema" to encodeEntity(point.schema),
         "data" to encodeData(point.data),
     )
 
@@ -39,56 +28,6 @@ object UnifiedDataPointPersistenceCodec {
         "producerAdapterId" to d.producerAdapterId,
         "ufsEnvelopeVersion" to d.ufsEnvelopeVersion,
     )
-
-    private fun encodeEntity(e: DataEntity): Map<String, Any?> = linkedMapOf(
-        "schemaId" to e.schemaId,
-        "schemaRevision" to e.schemaRevision,
-        "attributes" to e.attributes.mapValues { (_, v) -> encodeAttrSpec(v) },
-        "types" to e.types.mapValues { (_, v) -> encodeTypeSpec(v) },
-        "valueRanges" to e.valueRanges.mapValues { (_, v) -> encodeValueRange(v) },
-        "relationships" to e.relationships.map { encodeRelationship(it) },
-    )
-
-    private fun encodeAttrSpec(s: EntityAttributeSpec): Map<String, Any?> = mapOf(
-        "required" to s.required,
-        "semanticDescription" to s.semanticDescription,
-        "structureTag" to s.structureTag,
-    )
-
-    private fun encodeTypeSpec(t: EntityTypeSpec): Map<String, Any?> = mapOf(
-        "typeId" to t.typeId,
-        "encoding" to t.encoding,
-        "version" to t.version,
-    )
-
-    private fun encodeRelationship(r: EntityRelationship): Map<String, Any?> = mapOf(
-        "subjectAttributeKey" to r.subjectAttributeKey,
-        "predicateToken" to r.predicateToken,
-        "objectAttributeKey" to r.objectAttributeKey,
-        "bidirectional" to r.bidirectional,
-        "cardinalityHint" to r.cardinalityHint,
-    )
-
-    private fun encodeValueRange(v: EntityValueRange): Map<String, Any?> = when (v) {
-        is NumericEntityValueRange -> mapOf(
-            "type" to "numeric",
-            "minInclusive" to v.minInclusive,
-            "maxInclusive" to v.maxInclusive,
-            "stepHint" to v.stepHint,
-        )
-        is CategoricalEntityValueRange -> mapOf(
-            "type" to "categorical",
-            "allowedValues" to v.allowedValues.toList(),
-        )
-        is OrdinalEntityValueRange -> mapOf(
-            "type" to "ordinal",
-            "orderedLabels" to v.orderedLabels.toList(),
-        )
-        is UnboundedEntityValueRange -> mapOf(
-            "type" to "unbounded",
-            "rationale" to v.rationale,
-        )
-    }
 
     private fun encodeData(data: Map<String, Any>): Map<String, Any?> {
         val out = linkedMapOf<String, Any?>()
