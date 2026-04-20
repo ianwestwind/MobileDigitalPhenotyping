@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string-array name="cache_volatile_interval_units_short">
+        <item>Sec</item>
+        <item>Min</item>
+    </string-array>
+    <string-array name="cache_window_units_min_hr">
+        <item>Min</item>
+        <item>Hr</item>
+    </string-array>
+</resources>
