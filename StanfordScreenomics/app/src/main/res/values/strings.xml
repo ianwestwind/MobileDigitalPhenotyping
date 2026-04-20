@@ -11,4 +11,13 @@
     <string name="collection_stop">Stop</string>
     <string name="collection_error_runtime">Open the app once so collection can initialize, then try again.</string>
     <string name="collection_projection_required">Allow screen capture to record the full display while collection runs, or stop and try again.</string>
+    <string name="cache_panel_audio">In-memory audio (30 min)</string>
+    <string name="cache_panel_motion">In-memory motion (30 min)</string>
+    <string name="cache_panel_gps">In-memory GPS (30 min)</string>
+    <string name="cache_panel_screenshot">In-memory screenshot (30 min)</string>
+    <string name="cache_empty">No entries in the in-memory 30 min window yet.</string>
+    <string name="cache_snapshot_header">%1$d point(s) · volatile cache only · newest first</string>
+    <string name="cache_monitor_collecting">Collecting</string>
+    <string name="cache_monitor_idle">Idle</string>
+    <string name="cache_monitor_banner">%1$s · %2$d pts in memory (4 modalities) · UI tick %3$s</string>
 </resources>

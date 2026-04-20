@@ -20,4 +20,9 @@ interface ModalityLocalFileSink {
     suspend fun readBytes(modality: ModalityKind, relativePath: String): ByteArray?
 
     suspend fun deleteFile(modality: ModalityKind, relativePath: String): Boolean
+
+    /**
+     * Non-recursive list of file paths under `[modalityRoot]/[subdirectory]/` (paths include [subdirectory]/ prefix).
+     */
+    suspend fun listFilesUnderSubdirectory(modality: ModalityKind, subdirectory: String): List<String>
 }

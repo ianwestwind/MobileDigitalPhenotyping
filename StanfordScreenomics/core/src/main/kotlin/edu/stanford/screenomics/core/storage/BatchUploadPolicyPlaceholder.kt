@@ -11,16 +11,19 @@ import edu.stanford.screenomics.core.unified.ModalityKind
 object BatchUploadPolicyPlaceholder {
 
     /**
-     * When true, [ModalityKind.MOTION] points are still written to on-device JSON under the motion sink, but
-     * **no Firestore structured document** (and **no** full-document Realtime DB mirror) is enqueued for them.
-     * Local motion JSON is only deleted after a successful Firestore write, so files accumulate while paused.
-     * Set back to false to resume uploads on subsequent commits.
+     * When true, **accelerometer** and **gyroscope** [ModalityKind.MOTION] points only: skip structured Firestore
+     * and Realtime full-document mirror for those rows; each skipped structured document is stored under
+     * `files/motion/pending_firestore/<correlation>.json` until this flag becomes false, then flushed to Firestore/RTDB.
+     * **Step/minute** motion points (`motion.step.minute_window`) still enqueue Firestore; tier‑2
+     * `motion/steps/motion_*.json` is removed after a successful upload. IMU rows are written only under
+     * `motion/imu/motion_*.json` (and `pending_firestore/` when paused). The 30‑minute volatile motion cache
+     * retains **step aggregates only**; accel/gyro never enter that store.
      *
-     * **Note:** The Firebase client may still deliver **older motion writes** that were already queued locally
+     * **Note:** The Firebase client may still deliver **older** writes that were already queued before a pause flip
      * (offline persistence / pending writes). Force-stop the app or clear app data to discard that queue when testing.
      */
     @Volatile
-    var pauseMotionFirestoreUpload: Boolean = false
+    var pauseMotionFirestoreUpload: Boolean = true
 
     private const val STRUCTURED_BATCH_LOG_SIZE: Int = 25
     private const val MEDIA_BATCH_LOG_SIZE: Int = 25

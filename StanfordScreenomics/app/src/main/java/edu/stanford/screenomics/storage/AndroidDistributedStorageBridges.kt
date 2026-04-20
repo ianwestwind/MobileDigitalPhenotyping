@@ -16,22 +16,13 @@ import edu.stanford.screenomics.core.storage.CloudMediaStorageBridge
 import edu.stanford.screenomics.core.storage.FirestoreStructuredWriteBridge
 import edu.stanford.screenomics.core.storage.ModalityLocalFileSink
 import edu.stanford.screenomics.core.storage.ModalityStorageDirectoryName
+import edu.stanford.screenomics.core.storage.MotionStructuredCloudUploadSelectors
 import edu.stanford.screenomics.core.storage.RealtimeStructuredWriteBridge
 import edu.stanford.screenomics.core.unified.ModalityKind
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
-
-/** Same shape as [edu.stanford.screenomics.core.storage.UnifiedDataPointPersistenceCodec.toStructuredMap]. */
-private fun structuredDocumentModality(fields: Map<String, Any?>): String? {
-    @Suppress("UNCHECKED_CAST")
-    val meta = fields["metadata"] as? Map<String, Any?> ?: return null
-    return meta["modality"] as? String
-}
-
-private fun isMotionStructuredUfsDocument(fields: Map<String, Any?>): Boolean =
-    structuredDocumentModality(fields) == ModalityKind.MOTION.name
 
 private fun modalityFromStorageObjectPath(path: String): ModalityKind? = when {
     path.startsWith("${ModalityStorageDirectoryName.forModality(ModalityKind.AUDIO)}/") -> ModalityKind.AUDIO
@@ -105,6 +96,20 @@ class AndroidModalityLocalFileSink(
             )
             ok
         }
+
+    override suspend fun listFilesUnderSubdirectory(modality: ModalityKind, subdirectory: String): List<String> =
+        withContext(Dispatchers.IO) {
+            val root = File(appContext.filesDir, ModalityStorageDirectoryName.forModality(modality))
+            val dir = File(root, subdirectory)
+            if (!dir.isDirectory) {
+                return@withContext emptyList()
+            }
+            dir.listFiles()
+                ?.filter { it.isFile }
+                ?.sortedBy { it.name }
+                ?.map { file -> "$subdirectory/${file.name}" }
+                ?: emptyList()
+        }
 }
 
 class AndroidFirestoreStructuredWriteBridge(
@@ -117,18 +122,19 @@ class AndroidFirestoreStructuredWriteBridge(
         fields: Map<String, Any?>,
     ) {
         if (FirebaseApp.getApps(appContext).isEmpty()) return
-        if (isMotionStructuredUfsDocument(fields) && BatchUploadPolicyPlaceholder.pauseMotionFirestoreUpload) {
+        if (MotionStructuredCloudUploadSelectors.shouldSkipFirestoreForStructuredFields(fields)) {
             Log.i(
                 "FIREBASE",
-                "Skipped Firestore write for MOTION (pauseMotionFirestoreUpload) documentId=$documentId",
+                "Skipped Firestore write for MOTION accel/gyro (pauseMotionFirestoreUpload) documentId=$documentId",
             )
             PipelineDiagnosticsRegistry.emit(
                 logTag = PipelineLogTags.FIREBASE,
                 module = ModalityKind.MOTION,
-                stage = "firestore_skipped_motion_pause_bridge",
+                stage = "firestore_skipped_motion_accel_gyro_pause_bridge",
                 dataType = "firestore_document",
-                detail = "[FIREBASE][DB] Skipped structured document (motion pause) collection=$collection " +
-                    "documentId=$documentId",
+                detail = "[FIREBASE][DB] Skipped structured document (motion accel/gyro pause) collection=$collection " +
+                    "documentId=$documentId acquisition=" +
+                    "${MotionStructuredCloudUploadSelectors.structuredDocumentAcquisitionMethod(fields)}",
             )
             return
         }
@@ -153,6 +159,43 @@ class AndroidFirestoreStructuredWriteBridge(
                 stage = "firestore_write_failed",
                 dataType = "firestore_document",
                 detail = "[FIREBASE][DB] Firestore write failed collection=$collection documentId=$documentId error=${e.message}",
+            )
+        }
+    }
+
+    override suspend fun mergeStructuredDocumentEncodedData(
+        collection: String,
+        documentId: String,
+        encodedDataEntries: Map<String, Any?>,
+    ) {
+        if (FirebaseApp.getApps(appContext).isEmpty()) return
+        val nonNull = encodedDataEntries.filterValues { it != null }
+        if (nonNull.isEmpty()) return
+        runCatching {
+            val ref = FirebaseFirestore.getInstance().collection(collection).document(documentId)
+            val dataPatch = hashMapOf<String, Any>()
+            for ((k, v) in nonNull) {
+                dataPatch[k] = v as Any
+            }
+            ref.set(
+                hashMapOf("data" to dataPatch),
+                SetOptions.merge(),
+            ).await()
+            PipelineDiagnosticsRegistry.emit(
+                logTag = PipelineLogTags.FIREBASE,
+                module = null,
+                stage = "firestore_data_merge_complete",
+                dataType = "firestore_document",
+                detail = "[FIREBASE][DB] Merged data fields collection=$collection documentId=$documentId keys=${nonNull.keys}",
+            )
+        }.onFailure { e ->
+            Log.e("FIREBASE", "Firestore data merge failed collection=$collection id=$documentId", e)
+            PipelineDiagnosticsRegistry.emit(
+                logTag = PipelineLogTags.FIREBASE,
+                module = null,
+                stage = "firestore_data_merge_failed",
+                dataType = "firestore_document",
+                detail = "[FIREBASE][DB] Firestore data merge failed collection=$collection documentId=$documentId error=${e.message}",
             )
         }
     }
@@ -225,19 +268,18 @@ class AndroidRealtimeStructuredWriteBridge(
     override suspend fun enqueueStructured(path: String, fields: Map<String, Any?>) {
         if (FirebaseApp.getApps(appContext).isEmpty()) return
         if (path.contains("unified_structured_rt") &&
-            isMotionStructuredUfsDocument(fields) &&
-            BatchUploadPolicyPlaceholder.pauseMotionFirestoreUpload
+            MotionStructuredCloudUploadSelectors.shouldSkipFirestoreForStructuredFields(fields)
         ) {
             Log.i(
                 "FIREBASE",
-                "Skipped Realtime DB write for MOTION mirror (pauseMotionFirestoreUpload) path=$path",
+                "Skipped Realtime DB write for MOTION accel/gyro mirror (pauseMotionFirestoreUpload) path=$path",
             )
             PipelineDiagnosticsRegistry.emit(
                 logTag = PipelineLogTags.FIREBASE,
                 module = ModalityKind.MOTION,
-                stage = "realtime_skipped_motion_pause_bridge",
+                stage = "realtime_skipped_motion_accel_gyro_pause_bridge",
                 dataType = "realtime_structured",
-                detail = "[FIREBASE][DB] Skipped Realtime structured mirror (motion pause) path=$path",
+                detail = "[FIREBASE][DB] Skipped Realtime structured mirror (motion accel/gyro pause) path=$path",
             )
             return
         }

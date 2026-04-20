@@ -17,6 +17,7 @@ dependencyResolutionManagement {
 rootProject.name = "StanfordScreenomics"
 include ':app'
 include ':core'
+include ':enginePhenotype'
 include ':modules:audio'
 include ':modules:gps'
 include ':modules:motion'

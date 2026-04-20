@@ -36,29 +36,50 @@ open class BaseCache(
     final override fun modalityKind(): ModalityKind = modality
 
     final override suspend fun put(point: UnifiedDataPoint) {
+        val retainVolatile = shouldRetainPointInVolatileStore(point)
         val storeSizeAfterInsert = mutex.withLock {
             onBeforePut(point)
-            store[point.requireCorrelationId()] = point
-            onAfterPutExtension(point, store)
-            slidingWindowRetention?.let {
-                applySlidingWindowEvictionUnderLock(
-                    store = store,
-                    windowDuration = it,
-                    clockUpperBound = null,
-                )
+            if (retainVolatile) {
+                store[point.requireCorrelationId()] = point
+                onAfterPutExtension(point, store)
+                slidingWindowRetention?.let {
+                    applySlidingWindowEvictionUnderLock(
+                        store = store,
+                        windowDuration = it,
+                        clockUpperBound = null,
+                    )
+                }
             }
             store.size
         }
-        PipelineDiagnosticsRegistry.emit(
-            logTag = PipelineLogTags.CACHE,
-            module = modality,
-            stage = "cache_insert",
-            dataType = "${modality.name.lowercase()}_unified_point",
-            detail = "[CACHE][${modality.toModuleLogTag()}] inserted correlationId=${point.requireCorrelationId().value} " +
-                "cacheId=$cacheId timestamp=${point.metadata.timestamp} storeSize=$storeSizeAfterInsert",
-        )
+        if (retainVolatile) {
+            PipelineDiagnosticsRegistry.emit(
+                logTag = PipelineLogTags.CACHE,
+                module = modality,
+                stage = "cache_insert",
+                dataType = "${modality.name.lowercase()}_unified_point",
+                detail = "[CACHE][${modality.toModuleLogTag()}] inserted correlationId=${point.requireCorrelationId().value} " +
+                    "cacheId=$cacheId timestamp=${point.metadata.timestamp} storeSize=$storeSizeAfterInsert",
+            )
+        } else {
+            PipelineDiagnosticsRegistry.emit(
+                logTag = PipelineLogTags.CACHE,
+                module = modality,
+                stage = "cache_volatile_bypass",
+                dataType = "${modality.name.lowercase()}_unified_point",
+                detail = "[CACHE][${modality.toModuleLogTag()}] volatile store skipped (tier-2/local only) " +
+                    "correlationId=${point.requireCorrelationId().value} cacheId=$cacheId timestamp=${point.metadata.timestamp}",
+            )
+        }
         onAfterUnifiedPointCommittedOutsideLock(point)
     }
+
+    /**
+     * When false, the point is not kept in the in-memory [store] (no sliding-window row for it), but
+     * [onAfterUnifiedPointCommittedOutsideLock] still runs so local/cloud pipelines can observe it.
+     * Motion uses this for IMU streams while the 30‑minute volatile tier holds step aggregates only.
+     */
+    protected open fun shouldRetainPointInVolatileStore(point: UnifiedDataPoint): Boolean = true
 
     final override suspend fun get(correlationId: CorrelationId): UnifiedDataPoint? =
         mutex.withLock { store[correlationId] }
