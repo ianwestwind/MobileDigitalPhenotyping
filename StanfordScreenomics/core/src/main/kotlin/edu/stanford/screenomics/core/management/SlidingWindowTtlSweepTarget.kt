@@ -5,5 +5,7 @@ package edu.stanford.screenomics.core.management
  * without bypassing modality-local locking.
  */
 interface SlidingWindowTtlSweepTarget {
-    suspend fun sweepSlidingWindowTtl(spec: SlidingWindowTtlSpec = SlidingWindowTtlSpec.DEFAULT_THIRTY_MINUTES)
+    suspend fun sweepSlidingWindowTtl(
+        spec: SlidingWindowTtlSpec = SlidingWindowTtlSpec(windowDuration = VolatileCacheWindowRetention.duration()),
+    )
 }

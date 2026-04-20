@@ -5,6 +5,10 @@
     <string name="welcome_subtitle">Start collection to run audio, motion, GPS, and screenshot pipelines in the background. You will be asked to allow screen capture (full display) once per session. Screenshots pause while the screen is off.</string>
     <string name="start_all_modules">Start all modules</string>
     <string name="stop_all_modules">Stop collection</string>
+    <string name="run_engine_phenotype_demo">Run engine phenotype (RF on caches)</string>
+    <string name="engine_phenotype_result_hint">Trains a regression random forest on the four in-memory caches: audio dB, screenshot sentiment, and sun score are aligned to each motion step-total timestamp (LOCF + forward fill + medians), then used to predict session step total. Needs enough motion step rows in cache.</string>
+    <string name="engine_phenotype_running">Training model…</string>
+    <string name="engine_phenotype_error">Engine phenotype error: %1$s</string>
     <string name="collection_notification_title">Phenotyping collection</string>
     <string name="collection_notification_text">Audio, motion, GPS, and screenshot pipelines are active.</string>
     <string name="collection_channel_name">Phenotyping collection</string>
@@ -20,4 +24,8 @@
     <string name="cache_monitor_collecting">Collecting</string>
     <string name="cache_monitor_idle">Idle</string>
     <string name="cache_monitor_banner">%1$s · %2$d pts in memory (4 modalities) · UI tick %3$s</string>
+    <string name="cache_volatile_interval_every">Every</string>
+    <string name="cache_volatile_interval_invalid">Enter 1–60 for the in-memory cache row interval.</string>
+    <string name="cache_window_label">Cache window</string>
+    <string name="cache_window_invalid">Enter 1–60 for the shared in-memory cache window.</string>
 </resources>

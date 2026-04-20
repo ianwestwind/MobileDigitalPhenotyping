@@ -9,6 +9,7 @@ import android.media.MediaRecorder
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
 import edu.stanford.screenomics.core.collection.AudioPcmBufferRawFrame
+import edu.stanford.screenomics.core.collection.ModalityUserCadenceMillis
 import edu.stanford.screenomics.core.collection.RawModalityFrame
 import edu.stanford.screenomics.core.module.template.BaseDataNode
 import edu.stanford.screenomics.core.module.template.ModulePipelineDispatchers
@@ -27,7 +28,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.UUID
 
-private const val CYCLE_SPACING_MS: Long = 55_000L
 private const val CAPTURE_WINDOW_MS: Long = 5_000L
 
 /**
@@ -131,7 +131,7 @@ class AudioDataNode(
                             val copy = readBuf.copyOf(read)
                             when (phase) {
                                 AudioIngressPhase.WAIT_SPACING -> {
-                                    if (SystemClock.elapsedRealtime() - spacingAnchorElapsed >= CYCLE_SPACING_MS) {
+                                    if (SystemClock.elapsedRealtime() - spacingAnchorElapsed >= ModalityUserCadenceMillis.audioCycleSpacingMs()) {
                                         phase = AudioIngressPhase.COLLECT_FIVE_SECOND_WINDOW
                                         windowBuffer = ShortArray(samplesPerCaptureWindow)
                                         windowFilled = 0

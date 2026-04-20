@@ -15,7 +15,6 @@ import kotlinx.coroutines.launch
 class PeriodicCacheEvictionTicker(
     private val scope: CoroutineScope,
     private val manager: LifecycleAwareCacheManager,
-    private val spec: SlidingWindowTtlSpec = SlidingWindowTtlSpec.DEFAULT_THIRTY_MINUTES,
     private val tickIntervalMs: Long = DEFAULT_TICK_MS,
 ) {
     @Volatile
@@ -25,7 +24,9 @@ class PeriodicCacheEvictionTicker(
         if (job?.isActive == true) return
         job = scope.launch {
             while (isActive) {
-                manager.sweepAllRegisteredSlidingWindow(spec)
+                manager.sweepAllRegisteredSlidingWindow(
+                    SlidingWindowTtlSpec(windowDuration = VolatileCacheWindowRetention.duration()),
+                )
                 delay(tickIntervalMs)
             }
         }

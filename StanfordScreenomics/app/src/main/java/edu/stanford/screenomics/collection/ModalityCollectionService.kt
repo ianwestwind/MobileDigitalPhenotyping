@@ -20,6 +20,8 @@ import com.app.modules.screenshot.ScreenshotModule
 import edu.stanford.screenomics.BuildConfig
 import edu.stanford.screenomics.MainActivity
 import edu.stanford.screenomics.R
+import edu.stanford.screenomics.settings.VolatileCacheWindowPrefs
+import edu.stanford.screenomics.settings.VolatileIntervalPrefs
 import edu.stanford.screenomics.ScreenomicsApp
 import edu.stanford.screenomics.core.collection.DataNode
 import edu.stanford.screenomics.core.management.PeriodicCacheEvictionTicker
@@ -118,6 +120,9 @@ class ModalityCollectionService : Service() {
         synchronized(startStopLock) {
             isRunning = true
         }
+
+        VolatileIntervalPrefs.syncCollectionCadenceRegistryFromPrefs(applicationContext)
+        VolatileCacheWindowPrefs.syncRetentionFromPrefs(applicationContext)
 
         val ts = runtime.taskScheduler
         runBlocking(Dispatchers.Default) {

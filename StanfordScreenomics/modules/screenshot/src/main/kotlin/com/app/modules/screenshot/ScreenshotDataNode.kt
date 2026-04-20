@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Bitmap.CompressFormat
 import android.os.PowerManager
+import edu.stanford.screenomics.core.collection.ModalityUserCadenceMillis
 import edu.stanford.screenomics.core.collection.RawModalityFrame
 import edu.stanford.screenomics.core.collection.ScreenshotRasterRawFrame
 import edu.stanford.screenomics.core.module.template.BaseDataNode
@@ -72,16 +73,16 @@ class ScreenshotDataNode(
         ingressJob = collectionScope.launch(Dispatchers.Default) {
             while (isActive) {
                 if (!powerManager.isInteractive) {
-                    delay(pollIntervalMs)
+                    delay(ModalityUserCadenceMillis.screenshotPollMs())
                     continue
                 }
                 val bitmap = frameSupplier()
                 if (bitmap == null) {
-                    delay(pollIntervalMs)
+                    delay(ModalityUserCadenceMillis.screenshotPollMs())
                     continue
                 }
                 if (bitmap.isRecycled) {
-                    delay(pollIntervalMs)
+                    delay(ModalityUserCadenceMillis.screenshotPollMs())
                     continue
                 }
                 val encoded = encodeBitmap(bitmap)
@@ -91,7 +92,7 @@ class ScreenshotDataNode(
                     bitmap.recycle()
                 }
                 if (encoded.isEmpty()) {
-                    delay(pollIntervalMs)
+                    delay(ModalityUserCadenceMillis.screenshotPollMs())
                     continue
                 }
                 rawIngress.emit(
@@ -104,7 +105,7 @@ class ScreenshotDataNode(
                         encodedBytes = encoded,
                     ),
                 )
-                delay(pollIntervalMs)
+                delay(ModalityUserCadenceMillis.screenshotPollMs())
             }
         }
     }

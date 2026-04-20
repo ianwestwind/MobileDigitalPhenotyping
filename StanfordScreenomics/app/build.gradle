@@ -45,6 +45,13 @@ android {
         viewBinding true
         buildConfig true
     }
+
+    // Smile pulls JavaCPP / OpenBLAS; their jars duplicate identical GraalVM native-image metadata paths.
+    packaging {
+        resources {
+            pickFirsts += 'META-INF/native-image/**'
+        }
+    }
 }
 
 dependencies {
@@ -55,6 +62,7 @@ dependencies {
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-play-services:1.9.0'
 
     implementation project(':core')
+    implementation project(':enginePhenotype')
     implementation project(':modules:audio')
     implementation project(':modules:screenshot')
     implementation project(':modules:gps')

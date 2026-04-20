@@ -4,6 +4,7 @@ import edu.stanford.screenomics.core.debug.PipelineDiagnosticsRegistry
 import edu.stanford.screenomics.core.debug.PipelineLogTags
 import edu.stanford.screenomics.core.management.CacheManager
 import edu.stanford.screenomics.core.management.InterventionContext
+import edu.stanford.screenomics.core.management.VolatileCacheWindowRetention
 import edu.stanford.screenomics.core.management.InterventionController
 import edu.stanford.screenomics.core.management.InterventionDirective
 import java.time.Clock
@@ -11,8 +12,8 @@ import java.time.Duration
 import java.util.UUID
 
 /**
- * Default [EdgeComputationEngine]: **30-minute** sliding cache window, [PhenotypeAnalyzer], optional
- * [TfliteInterpreterBridge], then [InterventionController.evaluate].
+ * Default [EdgeComputationEngine]: sliding cache window from [VolatileCacheWindowRetention] (main UI),
+ * [PhenotypeAnalyzer], optional [TfliteInterpreterBridge], then [InterventionController.evaluate].
  *
  * **Data source:** only [CacheManager] snapshots of registered caches — no `DataNode` raw streams or pipeline ingress.
  *
@@ -22,7 +23,6 @@ class DefaultEdgeComputationEngine(
     private val phenotypeAnalyzer: PhenotypeAnalyzer = HeuristicPhenotypeAnalyzer(),
     private val featureEncoder: PhenotypeFeatureEncoder = DefaultPhenotypeFeatureEncoder(),
     private val tfliteInterpreterBridge: TfliteInterpreterBridge = NoOpTfliteInterpreterBridge(),
-    private val windowDuration: Duration = Duration.ofMinutes(30),
     private val clock: Clock = Clock.systemUTC(),
     private val modelAssetPath: String? = null,
     private val tfliteInputLength: Int = 16,
@@ -38,6 +38,7 @@ class DefaultEdgeComputationEngine(
         val snapshots = cacheManager.snapshotByCacheId()
         val flat = snapshots.values.flatten()
         val windowEnd = CachedWindowSelector.windowEndInclusive(flat, clock.instant())
+        val windowDuration = VolatileCacheWindowRetention.duration()
         val windowedById = snapshots.mapValues { (_, pts) ->
             CachedWindowSelector.filterWindow(pts, windowEnd, windowDuration)
         }

@@ -6,8 +6,9 @@ plugins {
     id 'com.google.gms.google-services' version '4.4.2' apply false
 }
 
-// macOS Finder duplicates ("SomeFile 2.xml", "SomeFile 3.xml", …) under build/intermediates break
-// resource parsing, dex merge, and bundleLibRuntimeToDir. Purge before Android tasks run.
+// macOS Finder duplicates ("SomeFile 2.xml", "digest_1 2.jar" under dexBuilderDebug/out, …) under
+// build/intermediates break resource parsing, dex merge, mergeJavaRes, and bundleLibRuntimeToDir.
+// Purge before Android tasks run.
 subprojects { Project sub ->
     sub.afterEvaluate {
         def isAndroid = sub.plugins.hasPlugin('com.android.application') ||
@@ -25,8 +26,8 @@ subprojects { Project sub ->
                     return
                 }
                 def n = f.name
-                // macOS duplicate names: "file 2.xml", "Class\$Inner 2.dex", … (invalid / duplicate outputs)
-                if (!(n ==~ /.* \d+\.(class|dex|xml|flat)$/)) {
+                // macOS duplicate names: "file 2.xml", "hash_1 2.jar" (dex archive dupes), … break dex merge / resources
+                if (!(n ==~ /.* \d+\.(class|dex|xml|flat|jar)$/)) {
                     return
                 }
                 f.delete()

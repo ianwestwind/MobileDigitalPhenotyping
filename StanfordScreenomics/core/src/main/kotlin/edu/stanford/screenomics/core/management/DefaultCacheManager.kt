@@ -13,9 +13,7 @@ import kotlinx.coroutines.sync.withLock
  *
  * Audit invariants (documentation only): [CacheManagerAuditedInvariantsPlaceholder].
  */
-class DefaultCacheManager(
-    private val defaultSweepSpec: SlidingWindowTtlSpec = SlidingWindowTtlSpec.DEFAULT_THIRTY_MINUTES,
-) : LifecycleAwareCacheManager {
+class DefaultCacheManager : LifecycleAwareCacheManager {
 
     private val mutex = Mutex()
     private val registry = linkedMapOf<String, RegisteredCache>()
@@ -58,7 +56,9 @@ class DefaultCacheManager(
     }
 
     override suspend fun onHostBackgrounded() {
-        sweepAllRegisteredSlidingWindow(defaultSweepSpec)
+        sweepAllRegisteredSlidingWindow(
+            SlidingWindowTtlSpec(windowDuration = VolatileCacheWindowRetention.duration()),
+        )
     }
 
     override suspend fun onHostForegrounded() {

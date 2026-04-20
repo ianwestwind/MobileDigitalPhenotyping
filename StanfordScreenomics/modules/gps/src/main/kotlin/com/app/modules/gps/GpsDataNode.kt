@@ -2,6 +2,7 @@ package com.app.modules.gps
 
 import android.content.Context
 import edu.stanford.screenomics.core.collection.GpsLocationRawFrame
+import edu.stanford.screenomics.core.collection.ModalityUserCadenceMillis
 import edu.stanford.screenomics.core.collection.RawModalityFrame
 import edu.stanford.screenomics.core.module.template.BaseDataNode
 import edu.stanford.screenomics.core.module.template.ModulePipelineDispatchers
@@ -79,7 +80,7 @@ class GpsDataNode(
                         ),
                     )
                 }
-                delay(pollIntervalMs)
+                delay(ModalityUserCadenceMillis.gpsPollMs())
             }
         }
     }

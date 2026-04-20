@@ -26,7 +26,7 @@ interface LifecycleAwareCacheManager : CacheManager {
      * Manager-directed sweep (parallel to per-[put] eviction inside [SlidingWindowTtlSweepTarget] caches).
      */
     suspend fun sweepAllRegisteredSlidingWindow(
-        spec: SlidingWindowTtlSpec = SlidingWindowTtlSpec.DEFAULT_THIRTY_MINUTES,
+        spec: SlidingWindowTtlSpec = SlidingWindowTtlSpec(windowDuration = VolatileCacheWindowRetention.duration()),
     )
 
     suspend fun clearAllRegisteredCaches()

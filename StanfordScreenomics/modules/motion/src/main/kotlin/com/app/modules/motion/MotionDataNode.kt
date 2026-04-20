@@ -7,6 +7,7 @@ import android.hardware.SensorEventListener
 import android.hardware.SensorManager
 import android.os.Handler
 import android.os.HandlerThread
+import edu.stanford.screenomics.core.collection.ModalityUserCadenceMillis
 import edu.stanford.screenomics.core.collection.MotionAccelRawFrame
 import edu.stanford.screenomics.core.collection.MotionGyroRawFrame
 import edu.stanford.screenomics.core.collection.MotionStepMinuteTickFrame
@@ -261,7 +262,7 @@ class MotionDataNode(
         val exec = emitDispatcher!!
         minuteStepJob = scope.launch {
             while (isActive) {
-                delay(minuteStepIntervalMs)
+                delay(ModalityUserCadenceMillis.motionStepWindowMs())
                 withContext(exec) {
                     rawIngress.emit(
                         MotionStepMinuteTickFrame(
