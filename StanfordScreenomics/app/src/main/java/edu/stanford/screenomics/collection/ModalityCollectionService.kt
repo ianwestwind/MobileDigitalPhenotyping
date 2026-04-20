@@ -11,12 +11,14 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.ServiceInfo
+import android.hardware.display.DisplayManager
 import android.os.Build
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.view.Display
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.app.modules.audio.AudioModule
@@ -59,7 +61,8 @@ import kotlin.jvm.JvmField
  * [edu.stanford.screenomics.screenshot.MediaProjectionScreenCapture] out
  * of sync. We therefore tear down local capture on [Intent.ACTION_SCREEN_OFF] while collection is active so that
  * [Intent.ACTION_SCREEN_ON] / [Intent.ACTION_USER_PRESENT] can reliably reopen the consent UI.
- * While collection is still active we listen for those actions, then start
+ * While collection is still active we listen for those actions and for default-display state via
+ * [DisplayManager.DisplayListener], then start
  * [edu.stanford.screenomics.MediaProjectionRelaunchTrampolineActivity] so the system capture dialog runs immediately
  * (no [MainActivity] delay). API 34+ uses BAL opt-in on the [PendingIntent] (sender + creator modes). If the activity
  * still cannot start, a high-importance notification with [android.app.Notification#setFullScreenIntent] asks the user
@@ -84,6 +87,11 @@ class ModalityCollectionService : Service() {
     private var lastMediaProjectionConsent: Pair<Int, Intent>? = null
 
     private var screenOnReceiver: BroadcastReceiver? = null
+
+    /** Catches display power transitions when [Intent.ACTION_SCREEN_ON] is delayed or missing (OEM-dependent). */
+    private var displayWakeListener: DisplayManager.DisplayListener? = null
+
+    private var lastKnownDefaultDisplayState: Int = Display.STATE_OFF
 
     /** Limits repeated UI launches when [Intent.ACTION_SCREEN_ON] fires in quick succession. */
     private var lastProjectionRelaunchUiElapsedMs: Long = 0L
@@ -383,13 +391,54 @@ class ModalityCollectionService : Service() {
         } catch (e: Exception) {
             Log.e(TAG, "Failed to register screen power broadcast receiver", e)
             screenOnReceiver = null
+            return
+        }
+        try {
+            registerDefaultDisplayWakeListener()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to register display wake listener", e)
         }
     }
 
     private fun unregisterScreenOnReceiver() {
+        unregisterDefaultDisplayWakeListener()
         val r = screenOnReceiver ?: return
         screenOnReceiver = null
         runCatching { unregisterReceiver(r) }
+    }
+
+    private fun registerDefaultDisplayWakeListener() {
+        if (displayWakeListener != null) {
+            return
+        }
+        val dm = getSystemService(DisplayManager::class.java) ?: return
+        lastKnownDefaultDisplayState = dm.getDisplay(Display.DEFAULT_DISPLAY)?.state ?: Display.STATE_OFF
+        displayWakeListener = object : DisplayManager.DisplayListener {
+            override fun onDisplayChanged(displayId: Int) {
+                if (displayId != Display.DEFAULT_DISPLAY) {
+                    return
+                }
+                val state = dm.getDisplay(displayId)?.state ?: return
+                val prev = lastKnownDefaultDisplayState
+                lastKnownDefaultDisplayState = state
+                if (state == Display.STATE_ON && prev != Display.STATE_ON) {
+                    requestMediaProjectionConsentUiAfterScreenOn()
+                } else if (state == Display.STATE_OFF && prev != Display.STATE_OFF) {
+                    syncMediaProjectionStoppedForNextWake()
+                }
+            }
+
+            override fun onDisplayAdded(displayId: Int) = Unit
+
+            override fun onDisplayRemoved(displayId: Int) = Unit
+        }
+        dm.registerDisplayListener(displayWakeListener, mainHandler)
+    }
+
+    private fun unregisterDefaultDisplayWakeListener() {
+        val l = displayWakeListener ?: return
+        displayWakeListener = null
+        runCatching { getSystemService(DisplayManager::class.java)?.unregisterDisplayListener(l) }
     }
 
     /**
@@ -416,12 +465,9 @@ class ModalityCollectionService : Service() {
                 return@post
             }
             val app = application as ScreenomicsApp
-            if (app.mediaProjectionCapture.isRunning()) {
-                return@post
-            }
-            if (lastMediaProjectionConsent == null) {
-                return@post
-            }
+            // Always drop local capture on wake so we never skip the consent flow due to a stale handle
+            // (the system can invalidate projection without a timely [MediaProjection.Callback.onStop]).
+            app.mediaProjectionCapture.stop()
             val now = SystemClock.uptimeMillis()
             if (now - lastProjectionRelaunchUiElapsedMs < 2_500L) {
                 return@post
@@ -433,9 +479,6 @@ class ModalityCollectionService : Service() {
                     return@postDelayed
                 }
                 if ((application as ScreenomicsApp).mediaProjectionCapture.isRunning()) {
-                    return@postDelayed
-                }
-                if (lastMediaProjectionConsent == null) {
                     return@postDelayed
                 }
                 launchProjectionRelaunchTrampolineWithBalOptIn()
@@ -450,18 +493,37 @@ class ModalityCollectionService : Service() {
 
     private fun launchProjectionRelaunchTrampolineWithBalOptIn() {
         val launch = trampolineRelaunchIntent()
-        // API 34+: BAL requires PendingIntent + ActivityOptions (sender and creator opt-in).
-        if (Build.VERSION.SDK_INT >= 34 && trySendProjectionRelaunchPendingIntent(launch)) {
-            return
-        }
-        if (runCatching {
-                startActivity(launch)
+        val balBundle = projectionRelaunchActivityOptions().toBundle()
+        // API 34+: try direct start with BAL bundle first; PendingIntent.send() can complete without an activity
+        // actually appearing, which previously short-circuited the fallbacks.
+        if (Build.VERSION.SDK_INT >= 34) {
+            val started = runCatching {
+                startActivity(launch, balBundle)
                 true
-            }.getOrDefault(false)
-        ) {
+            }.getOrElse { ex ->
+                Log.w(TAG, "startActivity with BAL bundle for projection relaunch failed", ex)
+                false
+            }
+            if (started) {
+                return
+            }
+            runCatching {
+                sendProjectionRelaunchPendingIntent(launch)
+            }.onFailure { ex ->
+                Log.w(TAG, "PendingIntent.send for projection relaunch failed", ex)
+            }
+        }
+        val plainStarted = runCatching {
+            startActivity(launch)
+            true
+        }.getOrElse { ex ->
+            Log.w(TAG, "Plain startActivity for projection relaunch failed", ex)
+            false
+        }
+        if (plainStarted) {
             return
         }
-        Log.w(TAG, "All activity launch paths failed; posting full-screen / tap notification")
+        Log.w(TAG, "Activity launch paths failed; posting full-screen / tap notification")
         showProjectionRelaunchPromptNotification(launch)
     }
 
@@ -474,21 +536,15 @@ class ModalityCollectionService : Service() {
         return piOpts
     }
 
-    private fun trySendProjectionRelaunchPendingIntent(launch: Intent): Boolean {
-        return runCatching {
-            val pi = PendingIntent.getActivity(
-                this,
-                PI_REQUEST_PROJECTION_RELAUNCH,
-                launch,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-                projectionRelaunchActivityOptions().toBundle(),
-            )
-            pi.send()
-            true
-        }.getOrElse {
-            Log.w(TAG, "PendingIntent.send for projection relaunch failed", it)
-            false
-        }
+    private fun sendProjectionRelaunchPendingIntent(launch: Intent) {
+        val pi = PendingIntent.getActivity(
+            this,
+            PI_REQUEST_PROJECTION_RELAUNCH,
+            launch,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            projectionRelaunchActivityOptions().toBundle(),
+        )
+        pi.send()
     }
 
     private fun showProjectionRelaunchPromptNotification(launch: Intent) {

@@ -196,12 +196,13 @@ object EnginePhenotypeStepCountRandomForest {
                     gpsPoints,
                     motionPoints,
                 )
-                val pred = result.model.predictSessionTotalAtReferenceTime(
+                // TEMPORARY: hide predicted sessionTotalSteps line from phenotype report; restore block below to re-enable.
+                /* val pred = result.model.predictSessionTotalAtReferenceTime(
                     tRef,
                     audioPoints,
                     screenshotPoints,
                     gpsPoints,
-                )
+                ) */
                 buildString {
                     appendLine("Step-count RF (volatile caches, temporally aligned)")
                     appendLine("reportWallClock=${Instant.now()}")
@@ -216,15 +217,15 @@ object EnginePhenotypeStepCountRandomForest {
                         ),
                     )
                     appendLine("referenceInstant=$tRef")
-                    appendLine(
+                    /* appendLine(
                         String.format(
                             Locale.US,
                             "predicted sessionTotalSteps≈%.0f (cumulative counter; not steps/min)",
                             pred,
                         ),
-                    )
+                    ) */
                     appendLine()
-                    appendLine("Feature importance (Smile forest; renormalized to % for this run):")
+                    appendLine("Feature importance:")
                     appendFeatureImportanceSection(result.model.forest, this)
                 }
             }

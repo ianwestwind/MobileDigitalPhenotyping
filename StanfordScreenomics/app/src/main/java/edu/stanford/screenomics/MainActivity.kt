@@ -206,7 +206,8 @@ class MainActivity : AppCompatActivity() {
             ModalityCollectionService.stop(this)
             binding.root.postDelayed({ refreshCollectionUi() }, 400L)
         }
-        binding.buttonRunEnginePhenotypeDemo.setOnClickListener {
+        // TEMPORARY: manual "Run engine Phenotype" demo — restore listener + remove android:visibility from button in activity_main.xml
+        /* binding.buttonRunEnginePhenotypeDemo.setOnClickListener {
             lifecycleScope.launch {
                 binding.buttonRunEnginePhenotypeDemo.isEnabled = false
                 binding.textEnginePhenotypeResult.text = getString(R.string.engine_phenotype_running)
@@ -222,7 +223,7 @@ class MainActivity : AppCompatActivity() {
                     binding.buttonRunEnginePhenotypeDemo.isEnabled = true
                 }
             }
-        }
+        } */
         refreshCollectionUi()
         if (consumeProjectionRelaunchExtra(intent)) {
             scheduleProjectionRelaunchFlow()
