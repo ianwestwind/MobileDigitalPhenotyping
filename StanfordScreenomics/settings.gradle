@@ -18,6 +18,7 @@ rootProject.name = "StanfordScreenomics"
 include ':app'
 include ':core'
 include ':enginePhenotype'
+include ':engineIntervention'
 include ':modules:audio'
 include ':modules:gps'
 include ':modules:motion'

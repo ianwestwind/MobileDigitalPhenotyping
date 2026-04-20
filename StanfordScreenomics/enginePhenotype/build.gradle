@@ -23,6 +23,7 @@ android {
 
 dependencies {
     implementation project(':core')
+    implementation project(':engineIntervention')
     // JVM random forest + DataFrame; used for on-device phenotyping prototypes.
     implementation 'com.github.haifengl:smile-core:4.3.0'
 }

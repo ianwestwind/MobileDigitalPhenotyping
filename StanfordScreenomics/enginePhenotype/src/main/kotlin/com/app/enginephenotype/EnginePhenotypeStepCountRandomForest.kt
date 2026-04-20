@@ -1,5 +1,8 @@
 package com.app.enginephenotype
 
+import com.app.engineintervention.EngineInterventionReceipts
+import com.app.engineintervention.PhenotypeRunEnvelope
+import com.app.engineintervention.PhenotypeRunOutcome
 import edu.stanford.screenomics.core.unified.UnifiedDataPoint
 import java.time.Instant
 import java.util.Locale
@@ -16,6 +19,11 @@ import smile.regression.RandomForest
 object EnginePhenotypeStepCountRandomForest {
 
     private const val MIN_TRAINING_ROWS = 12
+
+    data class PhenotypeRunUiBundle(
+        val phenotypeReport: String,
+        val interventionReceipt: String,
+    )
 
     data class StepTrainingSummary(
         val rowsUsed: Int,
@@ -114,6 +122,64 @@ object EnginePhenotypeStepCountRandomForest {
         )
     }
 
+    /**
+     * Trains the RF, builds the on-screen phenotype report, and forwards a compact run summary to
+     * [EngineInterventionReceipts] (including **PHENOTYPE_UPDATED** when the top-importance predictor changes).
+     */
+    fun trainWithInterventionReceipt(
+        audioPoints: List<UnifiedDataPoint>,
+        motionPoints: List<UnifiedDataPoint>,
+        gpsPoints: List<UnifiedDataPoint>,
+        screenshotPoints: List<UnifiedDataPoint>,
+        treeCount: Int = 64,
+        maxTrainingRows: Int = 1500,
+    ): PhenotypeRunUiBundle {
+        val result = trainFromVolatileCacheSnapshots(
+            audioPoints = audioPoints,
+            motionPoints = motionPoints,
+            gpsPoints = gpsPoints,
+            screenshotPoints = screenshotPoints,
+            treeCount = treeCount,
+            maxTrainingRows = maxTrainingRows,
+        )
+        val phenotypeReport = formatTrainResultReport(
+            result,
+            audioPoints = audioPoints,
+            motionPoints = motionPoints,
+            gpsPoints = gpsPoints,
+            screenshotPoints = screenshotPoints,
+        )
+        val envelope = when (result) {
+            is TrainResult.Success -> {
+                val top = topPredictorKey(result.model.forest)
+                val summary = String.format(
+                    Locale.US,
+                    "rows=%d RMSE=%.3f R²=%.4f topPredictor=%s",
+                    result.summary.rowsUsed,
+                    result.summary.outOfBagRmse,
+                    result.summary.outOfBagR2,
+                    top ?: "?",
+                )
+                PhenotypeRunEnvelope(
+                    outcome = PhenotypeRunOutcome.SUCCESS,
+                    topPredictorFeature = top,
+                    summaryOneLine = summary,
+                )
+            }
+            is TrainResult.InsufficientData ->
+                PhenotypeRunEnvelope(
+                    outcome = PhenotypeRunOutcome.INSUFFICIENT_DATA,
+                    topPredictorFeature = null,
+                    summaryOneLine = result.message.take(200),
+                )
+        }
+        val interventionReceipt = EngineInterventionReceipts.acknowledgePhenotypeRun(envelope)
+        return PhenotypeRunUiBundle(
+            phenotypeReport = phenotypeReport,
+            interventionReceipt = interventionReceipt,
+        )
+    }
+
     fun formatTrainResultReport(
         result: TrainResult,
         audioPoints: List<UnifiedDataPoint>,
@@ -171,6 +237,17 @@ object EnginePhenotypeStepCountRandomForest {
         "screenshot sentiment",
         "gps sunScore0To10",
     )
+
+    /**
+     * Predictor column name (e.g. `audio_db`) with largest absolute [RandomForest.importance] weight.
+     */
+    private fun topPredictorKey(forest: RandomForest): String? {
+        val raw = forest.importance()
+        if (raw.isEmpty()) return null
+        val names = predictorNamesForImportance(forest, raw.size)
+        val pairs = names.zip(raw.toList())
+        return pairs.maxByOrNull { abs(it.second) }?.first
+    }
 
     private fun appendFeatureImportanceSection(forest: RandomForest, out: StringBuilder) {
         val raw = forest.importance()

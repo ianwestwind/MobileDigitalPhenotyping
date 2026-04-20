@@ -47,40 +47,54 @@ class MediaProjectionScreenCapture(private val appContext: Context) {
     fun start(resultCode: Int, data: Intent): Boolean {
         synchronized(lock) {
             tearDownLocked()
-            val mgr = appContext.getSystemService(MediaProjectionManager::class.java) ?: return false
-            val projection = mgr.getMediaProjection(resultCode, data) ?: return false
-            mediaProjection = projection
+            return try {
+                val mgr = appContext.getSystemService(MediaProjectionManager::class.java) ?: return false
+                val projection = mgr.getMediaProjection(resultCode, data) ?: return false
+                mediaProjection = projection
 
-            val (w, h, dpi) = displaySizeDpi(appContext)
-            if (w <= 0 || h <= 0) {
-                Log.e(TAG, "Invalid display size $w x $h")
+                val (w, h, dpi) = displaySizeDpi(appContext)
+                if (w <= 0 || h <= 0) {
+                    Log.e(TAG, "Invalid display size $w x $h")
+                    tearDownLocked()
+                    return false
+                }
+
+                val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
+                imageReader = reader
+
+                projection.registerCallback(projectionCallback, mainHandler)
+
+                val vd = projection.createVirtualDisplay(
+                    VIRTUAL_DISPLAY_NAME,
+                    w,
+                    h,
+                    dpi,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
+                    reader.surface,
+                    null,
+                    null,
+                )
+                if (vd == null) {
+                    Log.e(TAG, "createVirtualDisplay returned null")
+                    tearDownLocked()
+                    return false
+                }
+                virtualDisplay = vd
+                Log.i(TAG, "MediaProjection capture started ${w}x$h @ $dpi dpi")
+                true
+            } catch (e: SecurityException) {
+                Log.e(TAG, "MediaProjection refused (stale or invalid consent?)", e)
                 tearDownLocked()
-                return false
-            }
-
-            val reader = ImageReader.newInstance(w, h, PixelFormat.RGBA_8888, 2)
-            imageReader = reader
-
-            projection.registerCallback(projectionCallback, mainHandler)
-
-            val vd = projection.createVirtualDisplay(
-                VIRTUAL_DISPLAY_NAME,
-                w,
-                h,
-                dpi,
-                DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
-                reader.surface,
-                null,
-                null,
-            )
-            if (vd == null) {
-                Log.e(TAG, "createVirtualDisplay returned null")
+                false
+            } catch (e: IllegalStateException) {
+                Log.e(TAG, "MediaProjection invalid state", e)
                 tearDownLocked()
-                return false
+                false
+            } catch (e: RuntimeException) {
+                Log.e(TAG, "MediaProjection start failed", e)
+                tearDownLocked()
+                false
             }
-            virtualDisplay = vd
-            Log.i(TAG, "MediaProjection capture started ${w}x$h @ $dpi dpi")
-            return true
         }
     }
 

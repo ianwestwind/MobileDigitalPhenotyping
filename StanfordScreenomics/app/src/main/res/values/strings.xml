@@ -2,23 +2,29 @@
 <resources>
     <string name="app_name">Stanford Screenomics</string>
     <string name="welcome_title">Stanford Screenomics</string>
-    <string name="welcome_subtitle">Start collection to run audio, motion, GPS, and screenshot pipelines in the background. You will be asked to allow screen capture (full display) once per session. Screenshots pause while the screen is off.</string>
+    <!-- Two segments pre-formatted in code (Locale.US) for stable decimals and %% handling. -->
+    <string name="main_resource_line">%1$s · %2$s</string>
     <string name="start_all_modules">Start all modules</string>
     <string name="stop_all_modules">Stop collection</string>
     <string name="run_engine_phenotype_demo">Run engine phenotype (RF on caches)</string>
     <string name="engine_phenotype_result_hint">Trains a regression random forest on the four in-memory caches: audio dB, screenshot sentiment, and sun score are aligned to each motion step-total timestamp (LOCF + forward fill + medians), then used to predict session step total. Needs enough motion step rows in cache.</string>
     <string name="engine_phenotype_running">Training model…</string>
     <string name="engine_phenotype_error">Engine phenotype error: %1$s</string>
+    <string name="engine_intervention_receipt_hint">engineIntervention receipts appear here after each RF run (PHENOTYPE_UPDATED when the top-importance predictor changes).</string>
+    <string name="engine_intervention_receipt_waiting">Waiting for engineIntervention receipt…</string>
     <string name="collection_notification_title">Phenotyping collection</string>
     <string name="collection_notification_text">Audio, motion, GPS, and screenshot pipelines are active.</string>
     <string name="collection_channel_name">Phenotyping collection</string>
     <string name="collection_stop">Stop</string>
     <string name="collection_error_runtime">Open the app once so collection can initialize, then try again.</string>
     <string name="collection_projection_required">Allow screen capture to record the full display while collection runs, or stop and try again.</string>
-    <string name="cache_panel_audio">In-memory audio (30 min)</string>
-    <string name="cache_panel_motion">In-memory motion (30 min)</string>
-    <string name="cache_panel_gps">In-memory GPS (30 min)</string>
-    <string name="cache_panel_screenshot">In-memory screenshot (30 min)</string>
+    <string name="collection_projection_relaunch_channel">Screenshot permission</string>
+    <string name="collection_projection_relaunch_title">Allow screenshots again</string>
+    <string name="collection_projection_relaunch_text">Collection is still running. Tap to approve screen capture.</string>
+    <string name="cache_panel_audio">In-memory audio</string>
+    <string name="cache_panel_motion">In-memory motion</string>
+    <string name="cache_panel_gps">In-memory GPS</string>
+    <string name="cache_panel_screenshot">In-memory screenshot</string>
     <string name="cache_empty">No entries in the in-memory 30 min window yet.</string>
     <string name="cache_snapshot_header">%1$d point(s) · volatile cache only · newest first</string>
     <string name="cache_monitor_collecting">Collecting</string>
@@ -28,4 +34,8 @@
     <string name="cache_volatile_interval_invalid">Enter 1–60 for the in-memory cache row interval.</string>
     <string name="cache_window_label">Cache window</string>
     <string name="cache_window_invalid">Enter 1–60 for the shared in-memory cache window.</string>
+    <string name="phenotype_window_label">Phenotype window</string>
+    <string name="phenotype_window_invalid">Enter 1–60 for the phenotype auto-run interval.</string>
+    <string name="picker_sheet_cancel">Cancel</string>
+    <string name="picker_sheet_update">Update</string>
 </resources>

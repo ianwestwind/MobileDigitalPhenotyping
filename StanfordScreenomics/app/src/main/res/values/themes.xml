@@ -5,4 +5,10 @@
         <item name="colorPrimaryVariant">@color/scr_ic_launcher_background</item>
         <item name="colorOnPrimary">@android:color/white</item>
     </style>
+
+    <style name="Theme.StanfordScreenomics.ProjectionTrampoline" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowContentOverlay">@null</item>
+    </style>
 </resources>

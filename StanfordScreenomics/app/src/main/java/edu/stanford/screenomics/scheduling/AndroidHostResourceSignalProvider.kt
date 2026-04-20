@@ -9,11 +9,14 @@ import android.os.SystemClock
 import edu.stanford.screenomics.core.scheduling.HostResourceSignalProvider
 import edu.stanford.screenomics.core.scheduling.HostResourceSnapshot
 import edu.stanford.screenomics.core.scheduling.ProcStatCpuSamplingPlaceholder
+import kotlin.jvm.Synchronized
+import kotlin.math.max
 import kotlin.math.min
 
 /**
  * Android [HostResourceSignalProvider]: [ActivityManager.MemoryInfo.availMem], battery capacity (API 21+),
  * and coarse process CPU from [Process.getElapsedCpuTime] deltas (API 26+), else [ProcStatCpuSamplingPlaceholder].
+ * [HostResourceSnapshot.processCpuLoad01] is always in **[0, 1]** (heuristic utilization for this process).
  */
 class AndroidHostResourceSignalProvider(
     appContext: Context,
@@ -29,10 +32,7 @@ class AndroidHostResourceSignalProvider(
             null
         }
 
-    @Volatile
     private var lastWallMs: Long = SystemClock.elapsedRealtime()
-
-    @Volatile
     private var lastCpuMs: Long = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
         Process.getElapsedCpuTime()
     } else {
@@ -46,6 +46,7 @@ class AndroidHostResourceSignalProvider(
         return HostResourceSnapshot(
             processCpuLoad01 = resolveCpuLoad01(),
             availableMemoryBytes = mem.availMem,
+            totalMemoryBytes = mem.totalMem,
             batteryFraction = resolveBatteryFraction(),
         )
     }
@@ -58,6 +59,7 @@ class AndroidHostResourceSignalProvider(
             Double.NaN
         }
 
+    @Synchronized
     private fun resolveCpuLoad01(): Double {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val nowWall = SystemClock.elapsedRealtime()
@@ -66,11 +68,21 @@ class AndroidHostResourceSignalProvider(
             val cpuDelta = nowCpu - lastCpuMs
             lastWallMs = nowWall
             lastCpuMs = nowCpu
+            if (cpuDelta < 0L) {
+                return 0.0
+            }
             val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(1)
             val r = cpuDelta.toDouble() / wallDelta.toDouble() / cores.toDouble()
-            return min(r, 1.5)
+            if (!r.isFinite()) {
+                return 0.0
+            }
+            return max(0.0, min(r, 1.0))
         }
         val p = ProcStatCpuSamplingPlaceholder.sampleProcessCpu01Placeholder()
-        return if (p.isNaN()) 0.0 else p
+        val out = when {
+            p.isNaN() || p.isInfinite() -> 0.0
+            else -> max(0.0, min(p, 1.0))
+        }
+        return if (out.isFinite()) out else 0.0
     }
 }

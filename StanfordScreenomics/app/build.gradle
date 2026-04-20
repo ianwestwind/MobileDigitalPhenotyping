@@ -63,6 +63,7 @@ dependencies {
 
     implementation project(':core')
     implementation project(':enginePhenotype')
+    implementation project(':engineIntervention')
     implementation project(':modules:audio')
     implementation project(':modules:screenshot')
     implementation project(':modules:gps')

@@ -1,15 +1,21 @@
 package edu.stanford.screenomics.collection
 
+import android.app.ActivityOptions
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -18,6 +24,7 @@ import com.app.modules.gps.GpsModule
 import com.app.modules.motion.MotionModule
 import com.app.modules.screenshot.ScreenshotModule
 import edu.stanford.screenomics.BuildConfig
+import edu.stanford.screenomics.MediaProjectionRelaunchTrampolineActivity
 import edu.stanford.screenomics.MainActivity
 import edu.stanford.screenomics.R
 import edu.stanford.screenomics.settings.VolatileCacheWindowPrefs
@@ -46,6 +53,17 @@ import kotlin.jvm.JvmField
  * Screenshots use [android.media.projection.MediaProjection] (full display). Start via
  * [Companion.start] with the consent [Intent] from [android.media.projection.MediaProjectionManager.createScreenCaptureIntent].
  * [com.app.modules.screenshot.ScreenshotDataNode] still skips work while the device is not interactive (screen off).
+ *
+ * When the screen turns off, the system may stop [android.media.projection.MediaProjection] without immediately
+ * invoking [android.media.projection.MediaProjection.Callback.onStop], leaving our
+ * [edu.stanford.screenomics.screenshot.MediaProjectionScreenCapture] out
+ * of sync. We therefore tear down local capture on [Intent.ACTION_SCREEN_OFF] while collection is active so that
+ * [Intent.ACTION_SCREEN_ON] / [Intent.ACTION_USER_PRESENT] can reliably reopen the consent UI.
+ * While collection is still active we listen for those actions, then start
+ * [edu.stanford.screenomics.MediaProjectionRelaunchTrampolineActivity] so the system capture dialog runs immediately
+ * (no [MainActivity] delay). API 34+ uses BAL opt-in on the [PendingIntent] (sender + creator modes). If the activity
+ * still cannot start, a high-importance notification with [android.app.Notification#setFullScreenIntent] asks the user
+ * to continue.
  */
 class ModalityCollectionService : Service() {
 
@@ -54,11 +72,21 @@ class ModalityCollectionService : Service() {
     private val serviceJob = SupervisorJob()
     private val serviceScope = CoroutineScope(serviceJob + Dispatchers.Default)
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private val activeNodes = ArrayList<DataNode>()
     private val collectionJobs = ArrayList<Job>()
     private var edgeJob: Job? = null
     private var evictionTicker: PeriodicCacheEvictionTicker? = null
     private var locationReader: LocationSnapshotReader? = null
+
+    /** Cloned consent for [edu.stanford.screenomics.screenshot.MediaProjectionScreenCapture.start] after SCREEN_ON. */
+    private var lastMediaProjectionConsent: Pair<Int, Intent>? = null
+
+    private var screenOnReceiver: BroadcastReceiver? = null
+
+    /** Limits repeated UI launches when [Intent.ACTION_SCREEN_ON] fires in quick succession. */
+    private var lastProjectionRelaunchUiElapsedMs: Long = 0L
 
     private var didStartForeground: Boolean = false
 
@@ -77,8 +105,11 @@ class ModalityCollectionService : Service() {
                 return START_NOT_STICKY
             }
             ACTION_START, null -> {
+                val projection = projectionFromIntent(intent)
                 if (!isRunning) {
-                    startCollectionInternal(projectionFromIntent(intent))
+                    startCollectionInternal(projection)
+                } else if (projection != null) {
+                    applyMediaProjectionUpdate(projection)
                 }
             }
         }
@@ -111,15 +142,20 @@ class ModalityCollectionService : Service() {
         invokeStartForeground(buildNotification())
         val app = application as ScreenomicsApp
         if (projection != null) {
+            lastMediaProjectionConsent = projection.first to Intent(projection.second)
             if (!app.mediaProjectionCapture.start(projection.first, projection.second)) {
                 Log.e(TAG, "MediaProjection start failed")
+            } else {
+                cancelProjectionRelaunchPromptNotification()
             }
         } else {
+            lastMediaProjectionConsent = null
             Log.w(TAG, "Missing projection consent intent; screenshot frames will be empty until capture starts")
         }
         synchronized(startStopLock) {
             isRunning = true
         }
+        registerScreenOnReceiver()
 
         VolatileIntervalPrefs.syncCollectionCadenceRegistryFromPrefs(applicationContext)
         VolatileCacheWindowPrefs.syncRetentionFromPrefs(applicationContext)
@@ -211,6 +247,20 @@ class ModalityCollectionService : Service() {
         }
     }
 
+    /**
+     * Applies a fresh consent [Intent] while collection is already running (e.g. after the user re-approves capture
+     * when the screen turns back on).
+     */
+    private fun applyMediaProjectionUpdate(projection: Pair<Int, Intent>) {
+        lastMediaProjectionConsent = projection.first to Intent(projection.second)
+        val app = application as ScreenomicsApp
+        if (!app.mediaProjectionCapture.start(projection.first, projection.second)) {
+            Log.e(TAG, "MediaProjection update after new consent failed")
+        } else {
+            cancelProjectionRelaunchPromptNotification()
+        }
+    }
+
     private fun stopCollectionInternal() {
         synchronized(startStopLock) {
             if (!isRunning) {
@@ -218,6 +268,9 @@ class ModalityCollectionService : Service() {
             }
             isRunning = false
         }
+        unregisterScreenOnReceiver()
+        lastMediaProjectionConsent = null
+        cancelProjectionRelaunchPromptNotification()
         edgeJob?.cancel()
         edgeJob = null
         evictionTicker?.stop()
@@ -301,6 +354,194 @@ class ModalityCollectionService : Service() {
         didStartForeground = true
     }
 
+    private fun registerScreenOnReceiver() {
+        if (screenOnReceiver != null) {
+            return
+        }
+        screenOnReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> syncMediaProjectionStoppedForNextWake()
+                    Intent.ACTION_SCREEN_ON,
+                    Intent.ACTION_USER_PRESENT,
+                    -> requestMediaProjectionConsentUiAfterScreenOn()
+                    else -> Unit
+                }
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF).apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_USER_PRESENT)
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(screenOnReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(screenOnReceiver, filter)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to register screen power broadcast receiver", e)
+            screenOnReceiver = null
+        }
+    }
+
+    private fun unregisterScreenOnReceiver() {
+        val r = screenOnReceiver ?: return
+        screenOnReceiver = null
+        runCatching { unregisterReceiver(r) }
+    }
+
+    /**
+     * Aligns local capture state with display power: avoids treating a stale [MediaProjection] handle as "still
+     * running" after [Intent.ACTION_SCREEN_ON], which would skip the consent / trampoline flow.
+     */
+    private fun syncMediaProjectionStoppedForNextWake() {
+        val running = synchronized(startStopLock) { isRunning }
+        if (!running) {
+            return
+        }
+        (application as ScreenomicsApp).mediaProjectionCapture.stop()
+    }
+
+    /**
+     * After wake / unlock, [MediaProjection] is often already stopped. Reusing the old consent [Intent] from
+     * [getMediaProjection] frequently throws [SecurityException], so we start [MediaProjectionRelaunchTrampolineActivity]
+     * (see [launchProjectionRelaunchTrampolineWithBalOptIn]).
+     */
+    private fun requestMediaProjectionConsentUiAfterScreenOn() {
+        mainHandler.post {
+            val running = synchronized(startStopLock) { isRunning }
+            if (!running) {
+                return@post
+            }
+            val app = application as ScreenomicsApp
+            if (app.mediaProjectionCapture.isRunning()) {
+                return@post
+            }
+            if (lastMediaProjectionConsent == null) {
+                return@post
+            }
+            val now = SystemClock.uptimeMillis()
+            if (now - lastProjectionRelaunchUiElapsedMs < 2_500L) {
+                return@post
+            }
+            lastProjectionRelaunchUiElapsedMs = now
+            mainHandler.postDelayed({
+                val stillRunning = synchronized(startStopLock) { isRunning }
+                if (!stillRunning) {
+                    return@postDelayed
+                }
+                if ((application as ScreenomicsApp).mediaProjectionCapture.isRunning()) {
+                    return@postDelayed
+                }
+                if (lastMediaProjectionConsent == null) {
+                    return@postDelayed
+                }
+                launchProjectionRelaunchTrampolineWithBalOptIn()
+            }, SCREEN_ON_PROJECTION_UI_DELAY_MS)
+        }
+    }
+
+    private fun trampolineRelaunchIntent(): Intent =
+        Intent(this, MediaProjectionRelaunchTrampolineActivity::class.java).apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        }
+
+    private fun launchProjectionRelaunchTrampolineWithBalOptIn() {
+        val launch = trampolineRelaunchIntent()
+        // API 34+: BAL requires PendingIntent + ActivityOptions (sender and creator opt-in).
+        if (Build.VERSION.SDK_INT >= 34 && trySendProjectionRelaunchPendingIntent(launch)) {
+            return
+        }
+        if (runCatching {
+                startActivity(launch)
+                true
+            }.getOrDefault(false)
+        ) {
+            return
+        }
+        Log.w(TAG, "All activity launch paths failed; posting full-screen / tap notification")
+        showProjectionRelaunchPromptNotification(launch)
+    }
+
+    private fun projectionRelaunchActivityOptions(): ActivityOptions {
+        val piOpts = ActivityOptions.makeBasic()
+        if (Build.VERSION.SDK_INT >= 34) {
+            piOpts.setPendingIntentBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+            piOpts.setPendingIntentCreatorBackgroundActivityStartMode(ActivityOptions.MODE_BACKGROUND_ACTIVITY_START_ALLOWED)
+        }
+        return piOpts
+    }
+
+    private fun trySendProjectionRelaunchPendingIntent(launch: Intent): Boolean {
+        return runCatching {
+            val pi = PendingIntent.getActivity(
+                this,
+                PI_REQUEST_PROJECTION_RELAUNCH,
+                launch,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                projectionRelaunchActivityOptions().toBundle(),
+            )
+            pi.send()
+            true
+        }.getOrElse {
+            Log.w(TAG, "PendingIntent.send for projection relaunch failed", it)
+            false
+        }
+    }
+
+    private fun showProjectionRelaunchPromptNotification(launch: Intent) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return
+        }
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        ensureProjectionRelaunchChannel()
+        val tap = PendingIntent.getActivity(
+            this,
+            PI_REQUEST_PROJECTION_RELAUNCH_NOTIFICATION,
+            launch,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            if (Build.VERSION.SDK_INT >= 34) projectionRelaunchActivityOptions().toBundle() else null,
+        )
+        val n = NotificationCompat.Builder(this, CHANNEL_ID_PROJECTION_REL_PROMPT)
+            .setSmallIcon(applicationInfo.icon)
+            .setContentTitle(getString(R.string.collection_projection_relaunch_title))
+            .setContentText(getString(R.string.collection_projection_relaunch_text))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setAutoCancel(true)
+            .setContentIntent(tap)
+            .apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    setFullScreenIntent(tap, true)
+                }
+            }
+            .build()
+        nm.notify(NOTIFICATION_ID_PROJECTION_REL_PROMPT, n)
+    }
+
+    private fun cancelProjectionRelaunchPromptNotification() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return
+        }
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        nm.cancel(NOTIFICATION_ID_PROJECTION_REL_PROMPT)
+    }
+
+    private fun ensureProjectionRelaunchChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return
+        }
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        nm.createNotificationChannel(
+            NotificationChannel(
+                CHANNEL_ID_PROJECTION_REL_PROMPT,
+                getString(R.string.collection_projection_relaunch_channel),
+                NotificationManager.IMPORTANCE_HIGH,
+            ),
+        )
+    }
+
     private fun ensureChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return
@@ -324,7 +565,13 @@ class ModalityCollectionService : Service() {
         private const val EXTRA_PROJECTION_DATA: String = "extra_projection_data"
 
         private const val NOTIFICATION_ID: Int = 71_001
+        private const val NOTIFICATION_ID_PROJECTION_REL_PROMPT: Int = 71_004
         private const val CHANNEL_ID: String = "phenotyping_collection"
+        private const val CHANNEL_ID_PROJECTION_REL_PROMPT: String = "phenotyping_projection_relaunch"
+        private const val PI_REQUEST_PROJECTION_RELAUNCH: Int = 71_003
+        private const val PI_REQUEST_PROJECTION_RELAUNCH_NOTIFICATION: Int = 71_006
+        /** Brief delay so the display and BAL policy are ready after [Intent.ACTION_SCREEN_ON]. */
+        private const val SCREEN_ON_PROJECTION_UI_DELAY_MS: Long = 600L
         private const val EDGE_INTERVAL_MS: Long = 60_000L
 
         @JvmField

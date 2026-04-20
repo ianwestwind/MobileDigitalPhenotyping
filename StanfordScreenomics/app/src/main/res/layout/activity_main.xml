@@ -22,62 +22,9 @@
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
         android:gravity="center_horizontal"
-        android:text="@string/welcome_subtitle"
-        android:textAppearance="?attr/textAppearanceBodyMedium" />
-
-    <LinearLayout
-        android:id="@+id/cache_monitor_banner_container"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:background="?attr/colorSurfaceVariant"
-        android:orientation="vertical"
-        android:paddingHorizontal="10dp"
-        android:paddingVertical="8dp">
-
-        <TextView
-            android:id="@+id/cache_monitor_banner"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:textAppearance="?attr/textAppearanceLabelSmall"
-            android:typeface="monospace"
-            tools:text="Collecting · 12 pts · tick 14:02:01.234" />
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-
-            <TextView
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="@string/cache_window_label"
-                android:textAppearance="?attr/textAppearanceLabelSmall" />
-
-            <EditText
-                android:id="@+id/cache_window_value"
-                android:layout_width="44dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="6dp"
-                android:gravity="center"
-                android:importantForAutofill="no"
-                android:imeOptions="actionDone"
-                android:inputType="number"
-                android:maxLength="2"
-                android:text="30"
-                android:textSize="12sp" />
-
-            <Spinner
-                android:id="@+id/cache_window_unit"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="6dp"
-                android:layout_weight="1"
-                android:minHeight="36dp" />
-        </LinearLayout>
-    </LinearLayout>
+        android:textAppearance="?attr/textAppearanceBodyMedium"
+        android:typeface="monospace"
+        tools:text="CPU usage 12.3% · RAM usage 4096 MB" />
 
     <LinearLayout
         android:layout_width="match_parent"
@@ -125,26 +72,21 @@
                             android:text="@string/cache_volatile_interval_every"
                             android:textAppearance="?attr/textAppearanceLabelSmall" />
 
-                        <EditText
-                            android:id="@+id/cache_audio_volatile_interval_value"
-                            android:layout_width="44dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="4dp"
-                            android:gravity="center"
-                            android:importantForAutofill="no"
-                            android:imeOptions="actionDone"
-                            android:inputType="number"
-                            android:maxLength="2"
-                            android:text="1"
-                            android:textSize="12sp" />
-
-                        <Spinner
-                            android:id="@+id/cache_audio_volatile_interval_unit"
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/cache_audio_volatile_interval_open"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="4dp"
                             android:layout_weight="1"
-                            android:minHeight="36dp" />
+                            android:gravity="center"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:minHeight="0dp"
+                            android:paddingTop="4dp"
+                            android:paddingBottom="4dp"
+                            android:textAllCaps="false"
+                            tools:text="55 Sec" />
                     </LinearLayout>
 
                     <ScrollView
@@ -200,26 +142,21 @@
                             android:text="@string/cache_volatile_interval_every"
                             android:textAppearance="?attr/textAppearanceLabelSmall" />
 
-                        <EditText
-                            android:id="@+id/cache_motion_volatile_interval_value"
-                            android:layout_width="44dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="4dp"
-                            android:gravity="center"
-                            android:importantForAutofill="no"
-                            android:imeOptions="actionDone"
-                            android:inputType="number"
-                            android:maxLength="2"
-                            android:text="1"
-                            android:textSize="12sp" />
-
-                        <Spinner
-                            android:id="@+id/cache_motion_volatile_interval_unit"
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/cache_motion_volatile_interval_open"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="4dp"
                             android:layout_weight="1"
-                            android:minHeight="36dp" />
+                            android:gravity="center"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:minHeight="0dp"
+                            android:paddingTop="4dp"
+                            android:paddingBottom="4dp"
+                            android:textAllCaps="false"
+                            tools:text="1 Min" />
                     </LinearLayout>
 
                     <ScrollView
@@ -282,26 +219,21 @@
                             android:text="@string/cache_volatile_interval_every"
                             android:textAppearance="?attr/textAppearanceLabelSmall" />
 
-                        <EditText
-                            android:id="@+id/cache_gps_volatile_interval_value"
-                            android:layout_width="44dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="4dp"
-                            android:gravity="center"
-                            android:importantForAutofill="no"
-                            android:imeOptions="actionDone"
-                            android:inputType="number"
-                            android:maxLength="2"
-                            android:text="1"
-                            android:textSize="12sp" />
-
-                        <Spinner
-                            android:id="@+id/cache_gps_volatile_interval_unit"
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/cache_gps_volatile_interval_open"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="4dp"
                             android:layout_weight="1"
-                            android:minHeight="36dp" />
+                            android:gravity="center"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:minHeight="0dp"
+                            android:paddingTop="4dp"
+                            android:paddingBottom="4dp"
+                            android:textAllCaps="false"
+                            tools:text="30 Sec" />
                     </LinearLayout>
 
                     <ScrollView
@@ -357,26 +289,21 @@
                             android:text="@string/cache_volatile_interval_every"
                             android:textAppearance="?attr/textAppearanceLabelSmall" />
 
-                        <EditText
-                            android:id="@+id/cache_screenshot_volatile_interval_value"
-                            android:layout_width="44dp"
-                            android:layout_height="wrap_content"
-                            android:layout_marginStart="4dp"
-                            android:gravity="center"
-                            android:importantForAutofill="no"
-                            android:imeOptions="actionDone"
-                            android:inputType="number"
-                            android:maxLength="2"
-                            android:text="1"
-                            android:textSize="12sp" />
-
-                        <Spinner
-                            android:id="@+id/cache_screenshot_volatile_interval_unit"
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/cache_screenshot_volatile_interval_open"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_marginStart="4dp"
                             android:layout_weight="1"
-                            android:minHeight="36dp" />
+                            android:gravity="center"
+                            android:insetTop="0dp"
+                            android:insetBottom="0dp"
+                            android:minHeight="0dp"
+                            android:paddingTop="4dp"
+                            android:paddingBottom="4dp"
+                            android:textAllCaps="false"
+                            tools:text="5 Sec" />
                     </LinearLayout>
 
                     <ScrollView
@@ -418,6 +345,78 @@
         android:layout_marginTop="8dp"
         android:text="@string/stop_all_modules" />
 
+    <LinearLayout
+        android:id="@+id/cache_monitor_banner_container"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="?attr/colorSurfaceVariant"
+        android:orientation="vertical"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="8dp">
+
+        <TextView
+            android:id="@+id/cache_monitor_banner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:textAppearance="?attr/textAppearanceLabelSmall"
+            android:typeface="monospace"
+            tools:text="Collecting · 12 pts · tick 14:02:01.234" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:baselineAligned="false"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/cache_window_label"
+                android:textAppearance="?attr/textAppearanceLabelSmall" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/cache_window_open"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="0dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:textAllCaps="false"
+                tools:text="30 Min" />
+
+            <Space
+                android:layout_width="12dp"
+                android:layout_height="1dp" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/phenotype_window_label"
+                android:textAppearance="?attr/textAppearanceLabelSmall" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/phenotype_window_open"
+                style="@style/Widget.Material3.Button.OutlinedButton"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minHeight="0dp"
+                android:paddingTop="4dp"
+                android:paddingBottom="4dp"
+                android:textAllCaps="false"
+                tools:text="5 Min" />
+        </LinearLayout>
+    </LinearLayout>
+
     <com.google.android.material.button.MaterialButton
         android:id="@+id/button_run_engine_phenotype_demo"
         style="@style/Widget.Material3.Button.TonalButton"
@@ -438,5 +437,18 @@
         android:textAppearance="?attr/textAppearanceBodySmall"
         android:typeface="monospace"
         tools:text="OOB accuracy=0.95\npredict(1.2,1.0) -> 1" />
+
+    <TextView
+        android:id="@+id/text_engine_intervention_receipt"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:background="?attr/colorSurfaceVariant"
+        android:paddingHorizontal="10dp"
+        android:paddingVertical="8dp"
+        android:text="@string/engine_intervention_receipt_hint"
+        android:textAppearance="?attr/textAppearanceBodySmall"
+        android:typeface="monospace"
+        tools:text="engineIntervention RECEIPT #1\nPHENOTYPE_UPDATED" />
 
 </LinearLayout>

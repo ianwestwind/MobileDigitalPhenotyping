@@ -2,16 +2,11 @@ package edu.stanford.screenomics
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
-import android.text.Editable
-import android.text.TextWatcher
-import android.view.inputmethod.EditorInfo
-import android.widget.ArrayAdapter
-import android.widget.EditText
-import android.widget.Spinner
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
@@ -19,6 +14,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import com.app.engineintervention.EngineInterventionReceipts
 import com.app.enginephenotype.EnginePhenotypeStepCountRandomForest
 import com.app.modules.audio.AudioCache
 import com.app.modules.gps.GpsCache
@@ -36,6 +32,7 @@ import edu.stanford.screenomics.core.management.VolatileCacheWindowRetention
 import edu.stanford.screenomics.core.edge.DefaultEdgeComputationEngine
 import edu.stanford.screenomics.core.edge.EdgeComputationEngine
 import edu.stanford.screenomics.core.scheduling.DefaultTaskScheduler
+import edu.stanford.screenomics.core.scheduling.HostResourceSnapshot
 import edu.stanford.screenomics.core.scheduling.TaskPriority
 import edu.stanford.screenomics.core.scheduling.TaskScheduler
 import edu.stanford.screenomics.core.collection.ModalityUserCadenceMillis
@@ -44,9 +41,10 @@ import edu.stanford.screenomics.core.unified.ModalityKind
 import edu.stanford.screenomics.core.unified.UnifiedDataPoint
 import edu.stanford.screenomics.core.unified.requireCorrelationId
 import edu.stanford.screenomics.databinding.ActivityMainBinding
+import edu.stanford.screenomics.settings.PhenotypeWindowPrefs
 import edu.stanford.screenomics.settings.VolatileCacheWindowPrefs
 import edu.stanford.screenomics.settings.VolatileIntervalPrefs
-import edu.stanford.screenomics.ui.UnitSpinnerSelectionCallbacks
+import edu.stanford.screenomics.ui.ValueUnitPickerBottomSheet
 import edu.stanford.screenomics.edge.AndroidTfliteInterpreterBridge
 import edu.stanford.screenomics.scheduling.AndroidHostResourceSignalProvider
 import edu.stanford.screenomics.storage.AndroidCloudMediaStorageBridge
@@ -60,12 +58,20 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
 class MainActivity : AppCompatActivity() {
+
+    companion object {
+        const val EXTRA_REQUEST_MEDIA_PROJECTION_AGAIN: String =
+            "edu.stanford.screenomics.extra.REQUEST_MEDIA_PROJECTION_AGAIN"
+    }
 
     private val cacheUiTickFormatter: DateTimeFormatter =
         DateTimeFormatter.ofPattern("HH:mm:ss.SSS", Locale.US).withZone(ZoneId.systemDefault())
@@ -79,9 +85,23 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var cacheLifecycleBridge: AndroidCacheManagerLifecycleBridge
 
-    private var suppressCacheVolatileIntervalEvents: Boolean = false
+    /** Serializes manual RF runs and periodic auto runs so they never overlap. */
+    private val phenotypeTrainMutex = Mutex()
 
-    private var suppressCacheWindowUiEvents: Boolean = false
+    private var phenotypeAutoTickerJob: Job? = null
+
+    private val projectionRelaunchRunnable = Runnable {
+        if (isFinishing) {
+            return@Runnable
+        }
+        if (!ModalityCollectionService.isRunning) {
+            return@Runnable
+        }
+        if ((application as ScreenomicsApp).mediaProjectionCapture.isRunning()) {
+            return@Runnable
+        }
+        launchScreenCaptureThenStartService()
+    }
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions(),
@@ -190,40 +210,32 @@ class MainActivity : AppCompatActivity() {
             lifecycleScope.launch {
                 binding.buttonRunEnginePhenotypeDemo.isEnabled = false
                 binding.textEnginePhenotypeResult.text = getString(R.string.engine_phenotype_running)
+                binding.textEngineInterventionReceipt.text = getString(R.string.engine_intervention_receipt_waiting)
                 try {
-                    val message = runCatching {
-                        withContext(Dispatchers.Default) {
-                            val audio = runtime.audioCache.snapshot()
-                            val motion = runtime.motionCache.snapshot()
-                            val gps = runtime.gpsCache.snapshot()
-                            val screenshot = runtime.screenshotCache.snapshot()
-                            val result = EnginePhenotypeStepCountRandomForest.trainFromVolatileCacheSnapshots(
-                                audioPoints = audio,
-                                motionPoints = motion,
-                                gpsPoints = gps,
-                                screenshotPoints = screenshot,
-                            )
-                            EnginePhenotypeStepCountRandomForest.formatTrainResultReport(
-                                result,
-                                audioPoints = audio,
-                                motionPoints = motion,
-                                gpsPoints = gps,
-                                screenshotPoints = screenshot,
-                            )
-                        }
-                    }.getOrElse { e ->
-                        getString(R.string.engine_phenotype_error, e.message ?: e.javaClass.simpleName)
-                    }
-                    binding.textEnginePhenotypeResult.text = message
+                    runCatching {
+                        runPhenotypeTrainLocked()
+                    }.fold(
+                        onSuccess = { bundle -> applyPhenotypeResultToUi(bundle) },
+                        onFailure = { e -> applyPhenotypeFailureToUi(e) },
+                    )
                 } finally {
                     binding.buttonRunEnginePhenotypeDemo.isEnabled = true
                 }
             }
         }
         refreshCollectionUi()
-        wireCacheVolatileIntervalControls()
+        if (consumeProjectionRelaunchExtra(intent)) {
+            scheduleProjectionRelaunchFlow()
+        }
+        wireVolatileIntervalOpenButtons()
         VolatileCacheWindowPrefs.syncRetentionFromPrefs(this)
-        wireCacheWindowControls()
+        wireCacheWindowOpenButton()
+        wirePhenotypeWindowOpenButton()
+        refreshVolatileIntervalOpenLabels()
+        updateCacheWindowOpenLabel()
+        updatePhenotypeWindowOpenLabel()
+        applyAllVolatileCacheIntervalsFromPrefs()
+        launchPhenotypeAutoTicker()
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.RESUMED) {
@@ -233,6 +245,38 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                runtime.taskScheduler.observeLastSnapshot().collect { snap ->
+                    binding.subtitle.text = formatMainResourceLine(snap)
+                }
+            }
+        }
+    }
+
+    /** CPU % from `processCpuLoad01` (0–1 → 0–100%). RAM MB = \((total - avail) / 1024^2\). All clamps + Locale.US formatting. */
+    private fun formatMainResourceLine(snap: HostResourceSnapshot): String {
+        val load01 = snap.processCpuLoad01
+        val frac = when {
+            !load01.isFinite() -> 0.0
+            load01 < 0.0 -> 0.0
+            load01 > 1.0 -> 1.0
+            else -> load01
+        }
+        val pct = (frac * 100.0).coerceIn(0.0, 100.0)
+        val usedMb = usedRamMegabytes(snap).coerceAtLeast(0.0)
+        val cpuSeg = String.format(Locale.US, "CPU usage %.1f%%", pct)
+        val ramSeg = String.format(Locale.US, "RAM usage %.0f MB", usedMb)
+        return getString(R.string.main_resource_line, cpuSeg, ramSeg)
+    }
+
+    private fun usedRamMegabytes(snap: HostResourceSnapshot): Double {
+        val total = snap.totalMemoryBytes
+        val avail = snap.availableMemoryBytes
+        if (total <= 0L) return 0.0
+        val usedBytes = (total - avail).coerceAtLeast(0L)
+        return usedBytes.toDouble() / (1024.0 * 1024.0)
     }
 
     override fun onStart() {
@@ -240,18 +284,54 @@ class MainActivity : AppCompatActivity() {
         refreshCollectionUi()
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        if (consumeProjectionRelaunchExtra(intent)) {
+            scheduleProjectionRelaunchFlow()
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         syncCacheVolatileIntervalUiAndCaches()
         syncCacheWindowUiAndSweep()
+        syncPhenotypeWindowUi()
     }
 
     override fun onDestroy() {
+        if (::binding.isInitialized) {
+            binding.root.removeCallbacks(projectionRelaunchRunnable)
+        }
+        phenotypeAutoTickerJob?.cancel()
         if (!ModalityCollectionService.isRunning) {
             runtime.distributedStorageManager.shutdown()
             runtime.taskScheduler.stopResourceMonitoring()
         }
         super.onDestroy()
+    }
+
+    private fun consumeProjectionRelaunchExtra(incoming: Intent): Boolean {
+        if (!incoming.getBooleanExtra(EXTRA_REQUEST_MEDIA_PROJECTION_AGAIN, false)) {
+            return false
+        }
+        incoming.removeExtra(EXTRA_REQUEST_MEDIA_PROJECTION_AGAIN)
+        return true
+    }
+
+    /**
+     * Called after [ModalityCollectionService] wakes the UI for a new MediaProjection consent while collection stays on.
+     */
+    private fun scheduleProjectionRelaunchFlow() {
+        if (!ModalityCollectionService.isRunning) {
+            return
+        }
+        val app = application as ScreenomicsApp
+        if (app.mediaProjectionCapture.isRunning()) {
+            return
+        }
+        binding.root.removeCallbacks(projectionRelaunchRunnable)
+        binding.root.postDelayed(projectionRelaunchRunnable, 500L)
     }
 
     private fun launchScreenCaptureThenStartService() {
@@ -354,112 +434,68 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun wireCacheVolatileIntervalControls() {
-        setupCacheVolatileIntervalRow(ModalityKind.AUDIO, binding.cacheAudioVolatileIntervalValue, binding.cacheAudioVolatileIntervalUnit)
-        setupCacheVolatileIntervalRow(ModalityKind.MOTION, binding.cacheMotionVolatileIntervalValue, binding.cacheMotionVolatileIntervalUnit)
-        setupCacheVolatileIntervalRow(ModalityKind.GPS, binding.cacheGpsVolatileIntervalValue, binding.cacheGpsVolatileIntervalUnit)
-        setupCacheVolatileIntervalRow(
-            ModalityKind.SCREENSHOT,
-            binding.cacheScreenshotVolatileIntervalValue,
-            binding.cacheScreenshotVolatileIntervalUnit,
-        )
-        applyAllVolatileCacheIntervalsFromPrefs()
+    private fun volatileIntervalUnitLabels(): Array<String> =
+        resources.getStringArray(R.array.cache_volatile_interval_units_short)
+
+    private fun cacheWindowUnitLabels(): Array<String> =
+        resources.getStringArray(R.array.cache_window_units_min_hr)
+
+    private fun formatValueUnitSummary(value: Int, unitWord: String): String = "$value $unitWord"
+
+    private fun volatileIntervalSheetTitle(modality: ModalityKind): String =
+        when (modality) {
+            ModalityKind.AUDIO -> getString(R.string.cache_panel_audio)
+            ModalityKind.MOTION -> getString(R.string.cache_panel_motion)
+            ModalityKind.GPS -> getString(R.string.cache_panel_gps)
+            ModalityKind.SCREENSHOT -> getString(R.string.cache_panel_screenshot)
+        }
+
+    private fun updateVolatileIntervalOpenText(modality: ModalityKind) {
+        val (value, useMinutes) = VolatileIntervalPrefs.readPair(this, modality)
+        val labels = volatileIntervalUnitLabels()
+        val text = formatValueUnitSummary(value, labels[if (useMinutes) 1 else 0])
+        when (modality) {
+            ModalityKind.AUDIO -> binding.cacheAudioVolatileIntervalOpen.text = text
+            ModalityKind.MOTION -> binding.cacheMotionVolatileIntervalOpen.text = text
+            ModalityKind.GPS -> binding.cacheGpsVolatileIntervalOpen.text = text
+            ModalityKind.SCREENSHOT -> binding.cacheScreenshotVolatileIntervalOpen.text = text
+        }
+    }
+
+    private fun refreshVolatileIntervalOpenLabels() {
+        for (m in arrayOf(ModalityKind.AUDIO, ModalityKind.MOTION, ModalityKind.GPS, ModalityKind.SCREENSHOT)) {
+            updateVolatileIntervalOpenText(m)
+        }
+    }
+
+    private fun wireVolatileIntervalOpenButtons() {
+        binding.cacheAudioVolatileIntervalOpen.setOnClickListener { openVolatileIntervalSheet(ModalityKind.AUDIO) }
+        binding.cacheMotionVolatileIntervalOpen.setOnClickListener { openVolatileIntervalSheet(ModalityKind.MOTION) }
+        binding.cacheGpsVolatileIntervalOpen.setOnClickListener { openVolatileIntervalSheet(ModalityKind.GPS) }
+        binding.cacheScreenshotVolatileIntervalOpen.setOnClickListener {
+            openVolatileIntervalSheet(ModalityKind.SCREENSHOT)
+        }
+    }
+
+    private fun openVolatileIntervalSheet(modality: ModalityKind) {
+        val (value, useMinutes) = VolatileIntervalPrefs.readPair(this, modality)
+        ValueUnitPickerBottomSheet.show(
+            context = this,
+            title = volatileIntervalSheetTitle(modality),
+            unitLabels = volatileIntervalUnitLabels(),
+            initialValue = value,
+            initialUnitIndex = if (useMinutes) 1 else 0,
+        ) { newValue, unitIndex ->
+            val minutes = unitIndex == 1
+            VolatileIntervalPrefs.writePair(this, modality, newValue, minutes)
+            updateVolatileIntervalOpenText(modality)
+            applyVolatileCacheIntervalToRuntime(modality, newValue to minutes)
+        }
     }
 
     private fun syncCacheVolatileIntervalUiAndCaches() {
-        suppressCacheVolatileIntervalEvents = true
-        try {
-            bindVolatileIntervalRowFromPrefs(ModalityKind.AUDIO, binding.cacheAudioVolatileIntervalValue, binding.cacheAudioVolatileIntervalUnit)
-            bindVolatileIntervalRowFromPrefs(ModalityKind.MOTION, binding.cacheMotionVolatileIntervalValue, binding.cacheMotionVolatileIntervalUnit)
-            bindVolatileIntervalRowFromPrefs(ModalityKind.GPS, binding.cacheGpsVolatileIntervalValue, binding.cacheGpsVolatileIntervalUnit)
-            bindVolatileIntervalRowFromPrefs(
-                ModalityKind.SCREENSHOT,
-                binding.cacheScreenshotVolatileIntervalValue,
-                binding.cacheScreenshotVolatileIntervalUnit,
-            )
-        } finally {
-            suppressCacheVolatileIntervalEvents = false
-        }
+        refreshVolatileIntervalOpenLabels()
         applyAllVolatileCacheIntervalsFromPrefs()
-    }
-
-    private fun bindVolatileIntervalRowFromPrefs(modality: ModalityKind, valueField: EditText, unitSpinner: Spinner) {
-        val (value, useMinutes) = VolatileIntervalPrefs.readPair(this, modality)
-        valueField.setText(value.toString())
-        unitSpinner.setSelection(if (useMinutes) 1 else 0, false)
-    }
-
-    private fun setupCacheVolatileIntervalRow(modality: ModalityKind, valueField: EditText, unitSpinner: Spinner) {
-        val adapter = ArrayAdapter.createFromResource(
-            this,
-            R.array.cache_volatile_interval_units_short,
-            android.R.layout.simple_spinner_item,
-        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-        suppressCacheVolatileIntervalEvents = true
-        try {
-            unitSpinner.adapter = adapter
-            bindVolatileIntervalRowFromPrefs(modality, valueField, unitSpinner)
-        } finally {
-            suppressCacheVolatileIntervalEvents = false
-        }
-
-        fun applyFromFields(persist: Boolean) {
-            if (suppressCacheVolatileIntervalEvents) return
-            val raw = valueField.text?.toString()?.trim().orEmpty()
-            val num = raw.toIntOrNull()
-            if (num == null || num !in 1..60) {
-                Toast.makeText(this, R.string.cache_volatile_interval_invalid, Toast.LENGTH_SHORT).show()
-                suppressCacheVolatileIntervalEvents = true
-                try {
-                    bindVolatileIntervalRowFromPrefs(modality, valueField, unitSpinner)
-                } finally {
-                    suppressCacheVolatileIntervalEvents = false
-                }
-                applyVolatileCacheIntervalToRuntime(modality, VolatileIntervalPrefs.readPair(this, modality))
-                return
-            }
-            val useMinutes = unitSpinner.selectedItemPosition == 1
-            if (persist) {
-                VolatileIntervalPrefs.writePair(this, modality, num, useMinutes)
-            }
-            applyVolatileCacheIntervalToRuntime(modality, num to useMinutes)
-        }
-
-        unitSpinner.onItemSelectedListener = UnitSpinnerSelectionCallbacks.onItemSelected {
-            applyFromFields(persist = true)
-        }
-        valueField.setOnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus) applyFromFields(persist = true)
-        }
-        valueField.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_DONE) {
-                applyFromFields(persist = true)
-                true
-            } else {
-                false
-            }
-        }
-
-        // Real-time apply while typing: debounce so transient empty/partial input does not toast or clobber prefs.
-        val debouncedPersistAndApply = Runnable {
-            if (suppressCacheVolatileIntervalEvents) return@Runnable
-            val raw = valueField.text?.toString()?.trim().orEmpty()
-            val num = raw.toIntOrNull() ?: return@Runnable
-            if (num !in 1..60) return@Runnable
-            val useMinutes = unitSpinner.selectedItemPosition == 1
-            VolatileIntervalPrefs.writePair(this@MainActivity, modality, num, useMinutes)
-            applyVolatileCacheIntervalToRuntime(modality, num to useMinutes)
-        }
-        valueField.addTextChangedListener(
-            object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-                override fun afterTextChanged(s: Editable?) {
-                    valueField.removeCallbacks(debouncedPersistAndApply)
-                    valueField.postDelayed(debouncedPersistAndApply, 280L)
-                }
-            },
-        )
     }
 
     private fun applyVolatileCacheIntervalToRuntime(modality: ModalityKind, valueAndMinutes: Pair<Int, Boolean>) {
@@ -480,84 +516,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun bindCacheWindowRowFromPrefs() {
+    private fun updateCacheWindowOpenLabel() {
         val (value, useHours) = VolatileCacheWindowPrefs.readPair(this)
-        binding.cacheWindowValue.setText(value.toString())
-        binding.cacheWindowUnit.setSelection(if (useHours) 1 else 0, false)
+        val labels = cacheWindowUnitLabels()
+        binding.cacheWindowOpen.text = formatValueUnitSummary(value, labels[if (useHours) 1 else 0])
     }
 
-    private fun wireCacheWindowControls() {
-        val adapter = ArrayAdapter.createFromResource(
-            this,
-            R.array.cache_window_units_min_hr,
-            android.R.layout.simple_spinner_item,
-        ).also { it.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item) }
-        suppressCacheWindowUiEvents = true
-        try {
-            binding.cacheWindowUnit.adapter = adapter
-            bindCacheWindowRowFromPrefs()
-        } finally {
-            suppressCacheWindowUiEvents = false
-        }
-
-        fun applyWindowFromFields(persist: Boolean) {
-            if (suppressCacheWindowUiEvents) return
-            val raw = binding.cacheWindowValue.text?.toString()?.trim().orEmpty()
-            val num = raw.toIntOrNull()
-            if (num == null || num !in 1..60) {
-                Toast.makeText(this, R.string.cache_window_invalid, Toast.LENGTH_SHORT).show()
-                suppressCacheWindowUiEvents = true
-                try {
-                    bindCacheWindowRowFromPrefs()
-                } finally {
-                    suppressCacheWindowUiEvents = false
-                }
-                VolatileCacheWindowPrefs.syncRetentionFromPrefs(this@MainActivity)
+    private fun wireCacheWindowOpenButton() {
+        binding.cacheWindowOpen.setOnClickListener {
+            val (value, useHours) = VolatileCacheWindowPrefs.readPair(this)
+            ValueUnitPickerBottomSheet.show(
+                context = this,
+                title = getString(R.string.cache_window_label),
+                unitLabels = cacheWindowUnitLabels(),
+                initialValue = value,
+                initialUnitIndex = if (useHours) 1 else 0,
+            ) { newValue, unitIndex ->
+                val hours = unitIndex == 1
+                VolatileCacheWindowPrefs.writePair(this@MainActivity, newValue, hours)
+                updateCacheWindowOpenLabel()
+                VolatileCacheWindowRetention.setDuration(VolatileCacheWindowPrefs.duration(newValue, hours))
                 scheduleGlobalCacheSweep()
-                return
-            }
-            val useHours = binding.cacheWindowUnit.selectedItemPosition == 1
-            if (persist) {
-                VolatileCacheWindowPrefs.writePair(this@MainActivity, num, useHours)
-            }
-            VolatileCacheWindowRetention.setDuration(VolatileCacheWindowPrefs.duration(num, useHours))
-            scheduleGlobalCacheSweep()
-        }
-
-        binding.cacheWindowUnit.onItemSelectedListener = UnitSpinnerSelectionCallbacks.onRunnable {
-            applyWindowFromFields(persist = true)
-        }
-        binding.cacheWindowValue.setOnFocusChangeListener { _, hasFocus ->
-            if (!hasFocus) applyWindowFromFields(persist = true)
-        }
-        binding.cacheWindowValue.setOnEditorActionListener { _, actionId, _ ->
-            if (actionId == EditorInfo.IME_ACTION_DONE) {
-                applyWindowFromFields(persist = true)
-                true
-            } else {
-                false
             }
         }
-        val debouncedWindowApply = Runnable {
-            if (suppressCacheWindowUiEvents) return@Runnable
-            val raw = binding.cacheWindowValue.text?.toString()?.trim().orEmpty()
-            val num = raw.toIntOrNull() ?: return@Runnable
-            if (num !in 1..60) return@Runnable
-            val useHours = binding.cacheWindowUnit.selectedItemPosition == 1
-            VolatileCacheWindowPrefs.writePair(this@MainActivity, num, useHours)
-            VolatileCacheWindowRetention.setDuration(VolatileCacheWindowPrefs.duration(num, useHours))
-            scheduleGlobalCacheSweep()
-        }
-        binding.cacheWindowValue.addTextChangedListener(
-            object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
-                override fun afterTextChanged(s: Editable?) {
-                    binding.cacheWindowValue.removeCallbacks(debouncedWindowApply)
-                    binding.cacheWindowValue.postDelayed(debouncedWindowApply, 280L)
-                }
-            },
-        )
     }
 
     private fun scheduleGlobalCacheSweep() {
@@ -571,13 +552,89 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun syncCacheWindowUiAndSweep() {
-        suppressCacheWindowUiEvents = true
-        try {
-            bindCacheWindowRowFromPrefs()
-        } finally {
-            suppressCacheWindowUiEvents = false
-        }
+        updateCacheWindowOpenLabel()
         VolatileCacheWindowPrefs.syncRetentionFromPrefs(this)
         scheduleGlobalCacheSweep()
+    }
+
+    private fun syncPhenotypeWindowUi() {
+        updatePhenotypeWindowOpenLabel()
+    }
+
+    private fun updatePhenotypeWindowOpenLabel() {
+        val (value, useHours) = PhenotypeWindowPrefs.readPair(this)
+        val labels = cacheWindowUnitLabels()
+        binding.phenotypeWindowOpen.text = formatValueUnitSummary(value, labels[if (useHours) 1 else 0])
+    }
+
+    private fun launchPhenotypeAutoTicker() {
+        phenotypeAutoTickerJob?.cancel()
+        phenotypeAutoTickerJob = lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                while (isActive) {
+                    runCatching {
+                        runPhenotypeTrainLocked()
+                    }.fold(
+                        onSuccess = { bundle -> applyPhenotypeResultToUi(bundle) },
+                        onFailure = { e -> applyPhenotypeFailureToUi(e) },
+                    )
+                    val periodMs = PhenotypeWindowPrefs.periodMillis(this@MainActivity)
+                    delay(periodMs)
+                }
+            }
+        }
+    }
+
+    private suspend fun runPhenotypeTrainLocked(): EnginePhenotypeStepCountRandomForest.PhenotypeRunUiBundle =
+        phenotypeTrainMutex.withLock {
+            snapshotCachesAndTrainPhenotype()
+        }
+
+    private suspend fun snapshotCachesAndTrainPhenotype(): EnginePhenotypeStepCountRandomForest.PhenotypeRunUiBundle =
+        withContext(Dispatchers.Default) {
+            val audio = runtime.audioCache.snapshot()
+            val motion = runtime.motionCache.snapshot()
+            val gps = runtime.gpsCache.snapshot()
+            val screenshot = runtime.screenshotCache.snapshot()
+            EnginePhenotypeStepCountRandomForest.trainWithInterventionReceipt(
+                audioPoints = audio,
+                motionPoints = motion,
+                gpsPoints = gps,
+                screenshotPoints = screenshot,
+            )
+        }
+
+    private fun applyPhenotypeResultToUi(bundle: EnginePhenotypeStepCountRandomForest.PhenotypeRunUiBundle) {
+        binding.textEnginePhenotypeResult.text = bundle.phenotypeReport
+        binding.textEngineInterventionReceipt.text = bundle.interventionReceipt
+    }
+
+    private fun applyPhenotypeFailureToUi(e: Throwable) {
+        binding.textEnginePhenotypeResult.text = getString(
+            R.string.engine_phenotype_error,
+            e.message ?: e.javaClass.simpleName,
+        )
+        binding.textEngineInterventionReceipt.text =
+            EngineInterventionReceipts.acknowledgePipelineFailure(
+                e.message ?: e.javaClass.simpleName,
+            )
+    }
+
+    private fun wirePhenotypeWindowOpenButton() {
+        binding.phenotypeWindowOpen.setOnClickListener {
+            val (value, useHours) = PhenotypeWindowPrefs.readPair(this)
+            ValueUnitPickerBottomSheet.show(
+                context = this,
+                title = getString(R.string.phenotype_window_label),
+                unitLabels = cacheWindowUnitLabels(),
+                initialValue = value,
+                initialUnitIndex = if (useHours) 1 else 0,
+            ) { newValue, unitIndex ->
+                val hours = unitIndex == 1
+                PhenotypeWindowPrefs.writePair(this@MainActivity, newValue, hours)
+                updatePhenotypeWindowOpenLabel()
+                launchPhenotypeAutoTicker()
+            }
+        }
     }
 }
