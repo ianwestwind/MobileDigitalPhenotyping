@@ -8,7 +8,7 @@ Rather than treating sensing, processing, and inference as separate or delayed s
 
 ![](StanfordScreenomics/doc/interface/interface.png)
 
----
+
 
 ## What this project is about
 
@@ -65,7 +65,7 @@ This is a **reference architecture** intended to demonstrate:
 - How edge-based phenotype computation can be implemented in practice
 - How caching, windowing, and model execution can be unified in a single system
 
----
+
 
 This project includes a working sample system built around four primary data streams:
 - Audio
@@ -80,7 +80,7 @@ Each modality follows the same structural pattern:
 4. Local + cloud storage fan-out
 5. Participation in edge computation cycles
 
----
+
 
 This system is intentionally minimal in its sample implementation, but the architecture is designed to open up much larger possibilities, including:
 - Additional sensor modalities  
@@ -89,7 +89,7 @@ This system is intentionally minimal in its sample implementation, but the archi
 - Real-time behavioral intervention systems  
 - Privacy-preserving mobile analytics pipelines  
 
----
+
 
 If you're interested in how **real-time mobile digital phenotyping becomes practical through edge computing and parallel processing**, this project is meant to give you a concrete starting point.
 
