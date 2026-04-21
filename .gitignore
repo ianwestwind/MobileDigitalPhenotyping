@@ -2,6 +2,9 @@
 *.md
 **/*.md
 
+# Root README (GitHub repository front page)
+!README.md
+
 # StanfordScreenomics/doc — entire tree trackable (overrides *.md / **/*.md above; this path only)
 !StanfordScreenomics/doc/
 !StanfordScreenomics/doc/**
