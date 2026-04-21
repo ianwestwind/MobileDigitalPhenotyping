@@ -2,6 +2,10 @@
 *.md
 **/*.md
 
+# Ship StanfordScreenomics in-repo docs on GitHub (must follow the rules above)
+!StanfordScreenomics/doc/
+!StanfordScreenomics/doc/**/*.md
+
 # Firebase & local secrets
 google-services.json
 **/google-services.json
