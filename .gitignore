@@ -2,9 +2,9 @@
 *.md
 **/*.md
 
-# Ship StanfordScreenomics in-repo docs on GitHub (must follow the rules above)
+# StanfordScreenomics/doc — entire tree trackable (overrides *.md / **/*.md above; this path only)
 !StanfordScreenomics/doc/
-!StanfordScreenomics/doc/**/*.md
+!StanfordScreenomics/doc/**
 
 # Top-level doc/ (paper, spec, cross-reference markdown)
 !doc/

@@ -1,4 +1,4 @@
-# Stanford Screenomics — Architecture Documentation
+# Stanford Screenomics — A Software Reference Architecture for Real-Time Mobile Digital Phenotyping
 
 This document provides a **traceable mapping between the architecture described in the manuscript and its implementation** in the StanfordScreenomics Android codebase.
 
