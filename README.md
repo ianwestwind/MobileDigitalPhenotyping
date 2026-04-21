@@ -26,6 +26,13 @@ The key idea is simple but powerful:
 
 ---
 
+Before downloading or using this repository, we **strongly suggest** reading the following preprint. It provides a comprehensive understanding of the architecture, the UFS standard, and the underlying logic to ensure a smooth setup and deployment:
+
+[Advancing Mobile Digital Phenotyping with Parallel, In-Memory Data Fusion and Processing: The Stanford Screenomics Platform](https://preprints.jmir.org/preprint/87320)
+*Ian Kim, Thomas N. Robinson, Byron B. Reeves, Nick Haber, Nilàm Ram.*
+
+---
+
 ## Why this matters
 
 Modern mobile devices are now capable of sustained sensing across multiple modalities. 
