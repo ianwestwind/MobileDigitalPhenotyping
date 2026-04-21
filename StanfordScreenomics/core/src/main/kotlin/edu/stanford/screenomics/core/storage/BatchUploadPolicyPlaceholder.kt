@@ -23,7 +23,7 @@ object BatchUploadPolicyPlaceholder {
      * (offline persistence / pending writes). Force-stop the app or clear app data to discard that queue when testing.
      */
     @Volatile
-    var pauseMotionFirestoreUpload: Boolean = true
+    var pauseMotionFirestoreUpload: Boolean = false
 
     private const val STRUCTURED_BATCH_LOG_SIZE: Int = 25
     private const val MEDIA_BATCH_LOG_SIZE: Int = 25
