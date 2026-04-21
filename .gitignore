@@ -6,6 +6,10 @@
 !StanfordScreenomics/doc/
 !StanfordScreenomics/doc/**/*.md
 
+# Top-level doc/ (paper, spec, cross-reference markdown)
+!doc/
+!doc/**/*.md
+
 # Firebase & local secrets
 google-services.json
 **/google-services.json
