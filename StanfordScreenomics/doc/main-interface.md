@@ -1,4 +1,4 @@
-# Main screen: interface design and functionality
+# Main Interface: Design and Functionality
 
 This document describes the **primary Android activity** for Stanford Screenomics: layout structure, user-visible controls, backing preferences, and how each action connects to collection, caches, edge computation, and the engine phenotype (random forest) path.
 
@@ -12,17 +12,20 @@ This document describes the **primary Android activity** for Stanford Screenomic
 
 Paths below are relative to `MobileDigitalPhenotyping/StanfordScreenomics/` unless noted.
 
----
 
-## 1. Purpose and composition
+![](interface/interface.png)
+
+
+## 1. Purpose and Composition
 
 The main screen is a **single-activity** control surface: start/stop multimodal **foreground collection**, inspect **volatile in-memory caches** per modality, tune **sampling spacing** and **retention window**, configure how often the **RF phenotype analyzer** auto-runs, and read **phenotype summary** text plus **engine intervention receipts** after each train.
 
 The UI uses **ViewBinding** (`ActivityMainBinding`), **Material 3** buttons and cards (`MaterialButton`, `MaterialCardView`), monospace bodies for cache dumps, and a **Material `BottomSheetDialog`** for numeric settings.
 
+
 ---
 
-## 2. Layout hierarchy (`activity_main.xml`)
+## 2. Layout Hierarchy (`activity_main.xml`)
 
 Root: **vertical `LinearLayout`**, `16dp` padding, full screen.
 
@@ -55,7 +58,7 @@ There is **no** `Toolbar` / `AppBar` in this layout; the activity uses the theme
 
 ---
 
-## 4. Per-modality cache cards (2×2)
+## 4. Per-modality Cache Cards (2×2)
 
 Each card follows the same internal pattern:
 
@@ -63,7 +66,7 @@ Each card follows the same internal pattern:
 2. **Row “Every [value] [Sec|Min]”** — label `@string/cache_volatile_interval_every` + outlined **`MaterialButton`** (`cache_*_volatile_interval_open`). Opens the **volatile interval** bottom sheet for that modality.
 3. **`ScrollView`** → **`TextView`** body (`cache_*_body`) — `12sp`, monospace, **selectable** text; shows latest volatile-cache snapshot lines (newest first).
 
-### 4.1 Live refresh of card bodies
+### 4.1 Live Refresh of Card Bodies
 
 While **`RESUMED`**, a coroutine loop runs every **`400 ms`**:
 
@@ -76,7 +79,7 @@ While **`RESUMED`**, a coroutine loop runs every **`400 ms`**:
   - **Screenshot:** `screenshot.sentiment.score`
 - **Empty:** `@string/cache_empty` (“No entries in the in-memory 30 min window yet.” — string is static; actual window length follows **Cache window** prefs).
 
-### 4.2 “Every” interval buttons (per-modality volatile insert spacing)
+### 4.2 “Every” Interval Buttons (per-modality volatile insert spacing)
 
 **User action:** tap the outlined button on a card.
 
@@ -109,7 +112,7 @@ While **`RESUMED`**, a coroutine loop runs every **`400 ms`**:
 
 ---
 
-## 5. Start / stop collection
+## 5. Start / Stop Collection
 
 ### 5.1 Start (`button_start_collection`)
 
@@ -128,28 +131,24 @@ While **`RESUMED`**, a coroutine loop runs every **`400 ms`**:
 - **Label:** `@string/stop_all_modules` (“Stop collection”).
 - Calls `ModalityCollectionService.stop(this)`; delayed `refreshCollectionUi()`.
 
-### 5.3 Button enablement
+### 5.3 Button Enablement
 
 `refreshCollectionUi()`: start **enabled** when not running; stop **enabled** when running.
 
-### 5.4 Projection re-consent
-
-`EXTRA_REQUEST_MEDIA_PROJECTION_AGAIN` on `Intent`: if set, `scheduleProjectionRelaunchFlow()` posts a delayed runnable that re-opens capture intent when collection is still on but projection capture is not running (e.g. after service-driven re-prompt).
-
 ---
 
-## 6. Cache window and phenotype window (banner row)
+## 6. Cache Window and Phenotype Window (banner row)
 
 Both use the same **`ValueUnitPickerBottomSheet`** pattern with **`@array/cache_window_units_min_hr`**: **“Min”**, **“Hr”**; value **1–60**.
 
-### 6.1 Cache window (`cache_window_open`)
+### 6.1 Cache Window (`cache_window_open`)
 
 - **Label column:** `@string/cache_window_label` (“Cache window”).
 - **Meaning:** shared **sliding TTL / edge slice duration** for volatile caches and `CachedWindowSelector` — persisted as **`VolatileCacheWindowPrefs`** (`volatile_cache_window_v1`), default **30 minutes** if unset.
 - **On commit:** writes prefs → `VolatileCacheWindowRetention.setDuration(...)` → `scheduleGlobalCacheSweep()` (`cacheManager.sweepAllRegisteredSlidingWindow` with current `SlidingWindowTtlSpec`).
 - **On resume:** `syncCacheWindowUiAndSweep()` — label + `VolatileCacheWindowPrefs.syncRetentionFromPrefs` + sweep.
 
-### 6.2 Phenotype window (`phenotype_window_open`)
+### 6.2 Phenotype Window (`phenotype_window_open`)
 
 - **Label column:** `@string/phenotype_window_label` (“Phenotype window”).
 - **Meaning:** interval between **automatic RF phenotype trains** (`PhenotypeWindowPrefs`, `phenotype_auto_window_v1`), default **5 minutes** if unset; **`periodMillis`** enforces **minimum 60 000 ms**.
@@ -157,14 +156,14 @@ Both use the same **`ValueUnitPickerBottomSheet`** pattern with **`@array/cache_
 
 ---
 
-## 7. Engine phenotype: RF output on the main screen
+## 7. Engine Phenotype: RF Output on the Main Interface
 
-### 7.1 Hint text (static until first train)
+### 7.1 Hint Text (static until first train)
 
 - **`text_engine_phenotype_result`:** `@string/engine_phenotype_result_hint` — explains regression RF on four caches, alignment to motion step totals, data requirements.
 - **`text_engine_intervention_receipt`:** `@string/engine_intervention_receipt_hint` — describes `engineIntervention` receipts and **PHENOTYPE_UPDATED**.
 
-### 7.2 Auto train loop
+### 7.2 Auto Train Loop
 
 - **Started in `onCreate`:** `launchPhenotypeAutoTicker()`.
 - **Scope:** `lifecycleScope` + `repeatOnLifecycle(Lifecycle.State.STARTED)`.
@@ -173,14 +172,9 @@ Both use the same **`ValueUnitPickerBottomSheet`** pattern with **`@array/cache_
 - **Failure:** `applyPhenotypeFailureToUi` — error text + `EngineInterventionReceipts.acknowledgePipelineFailure(...)`.
 - **Delay after each iteration:** `PhenotypeWindowPrefs.periodMillis(this)`.
 
-### 7.3 Manual “Run engine phenotype” button
-
-- **Layout:** `button_run_engine_phenotype_demo` is **`gone`**; XML comment says remove visibility to show again.
-- **Code:** listener is **commented out** in `MainActivity` (same “TEMPORARY” note). Manual one-shot train is therefore **disabled** unless a developer restores the listener and visibility.
-
 ---
 
-## 8. `PhenotypingRuntime` construction (when service not already running)
+## 8. `PhenotypingRuntime` Construction (when service not already running)
 
 On first `onCreate` without an active `ModalityCollectionService`, `MainActivity` builds:
 
@@ -200,21 +194,13 @@ If the service **is** already running and a runtime exists, the activity **reuse
 
 ---
 
-## 9. Lifecycle and teardown
+## 9. Lifecycle and Teardown
 
 | Callback | Main UI–relevant behavior |
 |----------|---------------------------|
 | **`onStart`** | `refreshCollectionUi()` |
 | **`onResume`** | Sync volatile intervals + caches; cache window prefs + sweep; phenotype window label |
 | **`onDestroy`** | Remove projection relaunch callbacks; **cancel** `phenotypeAutoTickerJob`; if collection **not** running: `distributedStorageManager.shutdown()`, `taskScheduler.stopResourceMonitoring()` |
-
----
-
-## 10. Related documentation
-
-- **Architecture and data flow:** `doc/architecture.md` (especially §5.1 narrative, §2.5 edge table, §4 phenotype).
-- **Phenotype vs edge summary terminology:** `doc/phenotype.md`.
-- **Storage and cache spec:** repository root `Data Cache and Storage Location`.
 
 ---
 
